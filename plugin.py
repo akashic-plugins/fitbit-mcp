@@ -24,7 +24,7 @@ class FitbitConfig(BaseModel):
 
 class FitbitPlugin(Plugin):
     name = "fitbit"
-    version = "1.0.0"
+    version = "1.0.1"
     desc = "Fitbit health monitor and sleep model"
     ConfigModel = FitbitConfig
 
@@ -99,7 +99,7 @@ class FitbitPlugin(Plugin):
         if workspace is None:
             return
         legacy = workspace / "mcp" / "fitbit-mcp" / "monitor"
-        if not legacy.is_dir() or (data_dir / "sleep_model.pkl").exists():
+        if not legacy.is_dir():
             return
         for name in (
             "monitor.config.toml",
@@ -112,8 +112,9 @@ class FitbitPlugin(Plugin):
             "stat_events_v2.json",
         ):
             source = legacy / name
-            if source.exists():
-                shutil.copy2(source, data_dir / name)
+            target = data_dir / name
+            if source.exists() and not target.exists():
+                shutil.copy2(source, target)
 
 
 def _monitor_available() -> bool:
@@ -122,4 +123,3 @@ def _monitor_available() -> bool:
             return True
     except OSError:
         return False
-
