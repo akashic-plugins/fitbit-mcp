@@ -1,0 +1,25 @@
+[fitbit]
+# 1. 本文件仅作示例，不要直接写入真实 secret 后提交。
+# 2. 本地请复制为 monitor.config.local.toml 再填写。
+client_id = "23V3JZ"
+client_secret = "REPLACE_WITH_YOUR_FITBIT_CLIENT_SECRET"
+redirect_uri = "http://127.0.0.1:18765/oauth/callback"
+auth_url = "https://www.fitbit.com/oauth2/authorize"
+token_url = "https://api.fitbit.com/oauth2/token"
+api_base = "https://api.fitbit.com"
+scopes = "heartrate activity oxygen_saturation sleep temperature"
+
+[server]
+host = "127.0.0.1"
+port = 18765
+log_level = "warning"
+poll_interval_sec = 300
+
+[health]
+# 可选: "v1" | "v2" | "both"
+# - v1: 旧 stat_engine
+# - v2: 新 v2 引擎（禁用 v1）
+# - both: 双轨并行（用于灰度）
+event_engine = "v1"
+# 事件最大时效（小时），超过后不再下发给 agent
+max_event_age_hours = 12

@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fitbit 健康仪表板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Deep Monet & Material Design System (High Contrast / OLED Mode) ── */
+  :root {
+    /* 背景：极致纯黑，消除雾感 */
+    --bg:       #000000;
+    
+    /* 卡片：极深锌灰，与纯黑背景形成锐利对比 */
+    --surface:  #09090b;      /* Zinc 950 */
+    --surface2: #18181b;      /* Zinc 900 */
+    --surface-hover: #27272a; /* Zinc 800 */
+    
+    /* 文字：极致高亮 */
+    --text:     #ffffff;      /* Pure White */
+    --muted:    #e4e4e7;      /* Zinc 200 - 极亮灰，不再使用暗沉的 Slate */
+    
+    /* 阴影：移除模糊阴影，改用微弱辉光或干脆不用，强调平面分割 */
+    --shadow-1: none;
+    --shadow-2: 0 0 0 1px #3f3f46;
+    
+    /* 莫奈色系（高饱和荧光版）：在纯黑背景下更跳跃 */
+    --hr-color: #ff5252;      /* Red A200 - 更鲜艳 */
+    --st-color: #69f0ae;      /* Green A200 - 更荧光 */
+    --sp-color: #e040fb;      /* Purple A200 - 更锐利 */
+    --blue:     #40c4ff;      /* Light Blue A200 */
+    --amber:    #ffd740;      /* Amber A200 */
+    
+    /* 边框：高对比度线条 */
+    --border:   #27272a;      /* Zinc 800 */
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding: 32px 24px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased; /* 字体抗锯齿增强 */
+  }
+  
+  /* ── Header ── */
+  h1 { 
+    font-size: 1.8rem; /* 更大 */
+    font-weight: 800;  /* 更粗 */
+    letter-spacing: -0.5px; 
+    color: #ffffff;
+    text-shadow: 0 2px 10px rgba(255,255,255,0.1);
+  }
+  
+  /* 通用卡片强化 */
+  .stat-card, .chart-card, .sleep-report-card, .log-card, .sleep-banner {
+    background: var(--surface);
+    border: 1px solid #3f3f46; /* Zinc 700 - 更亮的边框 */
+    box-shadow: none; /* 去除模糊阴影 */
+  }
+  
+  /* 状态徽章 */
+  .status-badge {
+    background: var(--surface2);
+    border: 1px solid #52525b; /* Zinc 600 */
+    color: #fff;
+    font-weight: 700;
+  }
+  .last-update { color: #a1a1aa; font-weight: 500; } /* Zinc 400 */
+
+  /* 刷新按钮 */
+  .refresh-btn {
+    background: #000;
+    border: 1px solid #52525b;
+    color: #fff;
+    font-weight: 700;
+  }
+  .refresh-btn:hover {
+    background: #18181b;
+    border-color: #fff;
+    box-shadow: 0 0 10px rgba(255,255,255,0.2);
+  }
+
+  /* ── Stats ── */
+  .stat-label {
+    color: #a1a1aa; /* Zinc 400 */
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  .stat-value {
+    color: #ffffff;
+    font-weight: 700; /* 加粗 */
+    text-shadow: none; /* 去除模糊 */
+  }
+  .stat-unit { color: #d4d4d8; font-weight: 600; }
+  .stat-sub { color: #d4d4d8; font-weight: 500; }
+
+  /* ── Sleep Banner (Solid) ── */
+  .sleep-banner.sleeping {
+    background: #0d001a; /* 极深紫黑 */
+    border: 1px solid var(--sp-color);
+    box-shadow: 0 0 20px rgba(224, 64, 251, 0.1);
+  }
+  .sleep-state-text { font-weight: 800; }
+  .sleep-reason { color: #e4e4e7; }
+  
+  /* ── Tables & Lists ── */
+  .log-table th {
+    background: var(--surface2);
+    color: #fff;
+    border-bottom: 1px solid #52525b;
+  }
+  .log-table td {
+    color: #fff;
+    border-bottom: 1px solid #27272a;
+  }
+  .log-reason { color: #d4d4d8; }
+  
+  /* ── Charts Context ── */
+  .chart-title { color: #fff; font-weight: 700; }
+  .chart-meta { color: #d4d4d8; }
+  .no-data { border-color: #52525b; color: #a1a1aa; }
+
+
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding: 32px 24px;
+    line-height: 1.5;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .logo { display: flex; align-items: center; gap: 12px; }
+  .logo-dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--blue);
+    box-shadow: 0 0 15px var(--blue); /* 增强发光感 */
+    opacity: 1;
+  }
+  h1 { 
+    font-size: 1.5rem; 
+    font-weight: 700; 
+    letter-spacing: -0.5px; 
+    color: #ffffff;
+  }
+  .header-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  
+  .status-badge {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 8px;
+    background: var(--surface2); 
+    border: 1px solid var(--border);
+    font-size: 0.85rem; color: var(--muted);
+    font-weight: 600;
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #475569; transition: background .3s, box-shadow .3s;
+  }
+  .status-dot.connected { background: var(--st-color); box-shadow: 0 0 10px var(--st-color); }
+  .last-update { font-size: 0.85rem; color: var(--muted); font-weight: 400; }
+
+  .refresh-btn {
+    padding: 8px 20px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer; transition: all .2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .refresh-btn:hover { 
+    background: var(--surface2); 
+    border-color: #4b5563;
+    color: var(--blue);
+    box-shadow: 0 0 12px rgba(144, 202, 249, 0.1);
+  }
+  .refresh-btn:active { transform: translateY(0); }
+  .refresh-btn:disabled { opacity: .5; cursor: default; transform: none; box-shadow: none; }
+
+  /* ── Health Alert Banner ── */
+  .alert-banner {
+    display: none;
+    border-radius: 12px;
+    padding: 16px 24px;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+    background: rgba(30, 41, 59, 0.95); /* 更不透明 */
+    background: #18181b; /* Zinc 900 solid fallback */
+    border: 1px solid #3f3f46;
+    border-left: 4px solid transparent;
+  }
+  .alert-banner.show { display: block; animation: fadeIn 0.5s ease; }
+  .alert-banner.high {
+    background: rgba(69, 10, 10, 0.8); /* Red 900 higher opacity */
+    border-left-color: var(--hr-color);
+    box-shadow: 0 0 20px rgba(229, 115, 115, 0.1);
+  }
+  .alert-banner.medium {
+    background: rgba(67, 20, 7, 0.8); /* Orange 900 higher opacity */
+    border-left-color: var(--amber);
+  }
+  
+  .alert-title {
+    font-size: 0.9rem; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .alert-banner.high   .alert-title { color: #ffebee; } /* Red 50 - High Contrast */
+  .alert-banner.medium .alert-title { color: #fff3e0; } /* Orange 50 - High Contrast */
+  
+  .alert-items { display: flex; flex-wrap: wrap; gap: 8px; }
+  .alert-item {
+    padding: 6px 14px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
+    background: rgba(255,255,255,0.1); 
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .alert-banner.high .alert-item { color: #ffcdd2; }
+  .alert-banner.medium .alert-item { color: #ffe0b2; }
+
+  /* ── Sleep State Banner ── */
+  .sleep-banner {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 24px 32px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    position: relative;
+    overflow: hidden;
+    transition: all .5s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
+  }
+  /* 夜间模式的状态光效 */
+  .sleep-banner.sleeping { 
+    background: linear-gradient(135deg, rgba(21, 27, 43, 1) 0%, rgba(30, 27, 50, 1) 100%); 
+    border-color: rgba(179, 157, 219, 0.3);
+    box-shadow: 0 0 30px rgba(179, 157, 219, 0.08);
+  }
+  .sleep-banner.awake { 
+    border-color: rgba(144, 202, 249, 0.3);
+  }
+  .sleep-banner.uncertain {
+    border-color: rgba(255, 224, 130, 0.3);
+  }
+
+  .sleep-main { display: flex; align-items: center; gap: 20px; }
+  .sleep-emoji { font-size: 3.2rem; filter: drop-shadow(0 0 10px rgba(255,255,255,0.2)); }
+  .sleep-state-text { font-size: 2rem; font-weight: 500; color: #ffffff; letter-spacing: -0.5px; }
+  .sleep-reason { font-size: 0.9rem; color: var(--muted); margin-top: 4px; font-weight: 400; }
+  .sleep-since  { font-size: 0.85rem; color: var(--muted); text-align: right; }
+
+  /* Agent Policy pill */
+  .policy-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 16px; border-radius: 8px; font-size: 0.8rem; font-weight: 700;
+    background: var(--surface2);
+    border: 1px solid transparent;
+  }
+  .policy-pill.sleep_protect { color: #b39ddb; border-color: rgba(179, 157, 219, 0.3); background: rgba(179, 157, 219, 0.1); }
+  .policy-pill.cautious      { color: #ffe082; border-color: rgba(255, 224, 130, 0.3); background: rgba(255, 224, 130, 0.1); }
+  .policy-pill.normal        { color: #a5d6a7; border-color: rgba(165, 214, 167, 0.3); background: rgba(165, 214, 167, 0.1); }
+
+  /* ── Stat Cards ── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin-bottom: 24px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+    transition: all .3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
+  }
+  .stat-card:hover { 
+    transform: translateY(-4px); 
+    box-shadow: var(--shadow-2);
+    border-color: #4b5563;
+    background: var(--surface-hover);
+  }
+  
+  /* 顶部细条发光 */
+  .stat-card::after {
+    content: '';
+    position: absolute; top: 0; left: 0; width: 100%; height: 2px;
+    opacity: 0.8;
+    box-shadow: 0 0 10px currentColor;
+  }
+  .stat-card.hr::after   { background: var(--hr-color); color: var(--hr-color); }
+  .stat-card.st::after   { background: var(--st-color); color: var(--st-color); }
+  .stat-card.sp::after   { background: var(--sp-color); color: var(--sp-color); }
+  .stat-card.lag::after  { background: var(--blue); color: var(--blue); }
+
+  .stat-label {
+    font-size: 0.8rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px; font-weight: 700;
+  }
+  .stat-icon { font-size: 1.1rem; opacity: 1; }
+  .stat-value {
+    font-size: 2.8rem; font-weight: 500; line-height: 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -1px;
+    color: #ffffff;
+    text-shadow: 0 0 20px rgba(0,0,0,0.5); /* 提升文字对比度 */
+  }
+  .stat-unit { font-size: 1.1rem; font-weight: 600; color: #e4e4e7; margin-left: 6px; }
+  .stat-sub { font-size: 0.85rem; color: #e4e4e7; margin-top: 8px; font-weight: 400; }
+  
+  .stat-card.hr .stat-value { color: var(--hr-color); }
+  .stat-card.st .stat-value { color: var(--st-color); }
+  .stat-card.sp .stat-value { color: var(--sp-color); }
+  .stat-card.lag .stat-value { font-size: 2.2rem; color: var(--blue); }
+
+  /* ── Charts ── */
+  .chart-card {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
+  }
+  .chart-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .chart-title {
+    font-size: 1.1rem; font-weight: 700; color: #f1f5f9;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .chart-dot { width: 10px; height: 10px; border-radius: 50%; opacity: 1; box-shadow: 0 0 8px currentColor; }
+  .chart-meta { font-size: 0.85rem; color: var(--muted); font-weight: 500; }
+  
+  /* ── Scrollable Charts ── */
+  .chart-scroll-view {
+    position: relative;
+    height: 180px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .chart-body {
+    height: 100%;
+    position: relative;
+    min-width: 100%;
+  }
+  /* Fix no-data absolute positioning relative to scroll-view */
+  .chart-scroll-view .no-data {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 10;
+  }
+
+  /* ── Sleep Report ── */
+  .section-title {
+    font-size: 1.1rem; font-weight: 700;
+    margin-bottom: 16px; margin-top: 8px;
+    display: flex; align-items: center; gap: 10px;
+    color: #f1f5f9;
+  }
+  .sleep-report-card {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
+  }
+  .sleep-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .sleep-metric {
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+    transition: background .2s;
+    border: 1px solid transparent;
+  }
+  .sleep-metric:hover { background: var(--surface-hover); border-color: var(--border); }
+  .sleep-metric-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
+  .sleep-metric-value { font-size: 1.5rem; font-weight: 500; color: #ffffff; }
+  .sleep-metric-unit { font-size: 0.8rem; color: #e4e4e7; margin-left: 2px; font-weight: 500; }
+
+  .sleep-days-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 12px;
+  }
+  .sleep-day-cell {
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+    border: 1px solid transparent;
+    transition: all .2s;
+    cursor: default;
+  }
+  .sleep-day-cell:hover { 
+    background: var(--surface-hover);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    border-color: var(--border);
+    transform: translateY(-2px);
+  }
+  .sleep-day-cell.no-data { opacity: 0.5; }
+  .sleep-day-date { font-size: 0.75rem; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+  .sleep-day-dur  { font-size: 1.2rem; font-weight: 600; color: #ffffff; }
+  .sleep-day-eff  { font-size: 0.75rem; color: #e4e4e7; margin-top: 4px; }
+  .sleep-day-hrv  { font-size: 0.7rem; color: var(--sp-color); margin-top: 2px; font-weight: 500; }
+  .eff-bar {
+    height: 4px; border-radius: 2px; margin-top: 8px;
+    background: rgba(255,255,255,0.1); overflow: hidden;
+  }
+  .eff-bar-fill { height: 100%; border-radius: 2px; transition: width .5s; box-shadow: 0 0 5px currentColor; }
+
+  /* ── Sleep Log ── */
+  .log-card {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
+  }
+  .log-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .log-title {
+    font-size: 1.1rem; font-weight: 700;
+    display: flex; align-items: center; gap: 10px; color: #f1f5f9;
+  }
+  .log-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .log-controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .log-control {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    outline: none;
+    transition: all .2s;
+  }
+  .log-control:hover, .log-control:focus { background: var(--surface-hover); border-color: #4b5563; }
+  
+  .log-control-btn {
+    cursor: pointer;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    font-weight: 600;
+    color: #f1f5f9;
+  }
+  .log-control-btn:hover {
+    background: var(--surface-hover);
+    border-color: #4b5563;
+    color: #fff;
+  }
+  
+  .log-meta {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin-bottom: 12px;
+    padding-left: 4px;
+  }
+  .log-scroll {
+    max-height: min(65vh, 650px);
+    overflow: auto;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+  }
+  .log-table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 0.85rem; }
+  .log-table th {
+    text-align: left; color: var(--muted); font-weight: 700;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--surface2); /* sticky header bg */
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+  .log-table td { 
+    padding: 10px 16px; 
+    border-bottom: 1px solid rgba(255,255,255,0.03); 
+    vertical-align: middle; 
+    white-space: nowrap; 
+    color: #e2e8f0;
+  }
+  .log-reason {
+    max-width: 400px;
+    white-space: normal;
+    line-height: 1.4;
+    color: #e4e4e7;
+  }
+  .log-table tr:hover td { background: rgba(255,255,255,0.08); }
+  .log-table tr:last-child td { border-bottom: none; }
+  
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 12px; border-radius: 12px;
+    font-size: 0.75rem; font-weight: 700;
+  }
+  /* 调整 Badge 为半透明发光样式 */
+  .badge.sleeping  { background: rgba(179, 157, 219, 0.15); color: #d1c4e9; border: 1px solid rgba(179, 157, 219, 0.3); }
+  .badge.awake     { background: rgba(144, 202, 249, 0.15); color: #bbdefb; border: 1px solid rgba(144, 202, 249, 0.3); }
+  .badge.uncertain { background: rgba(255, 224, 130, 0.15); color: #ffe082; border: 1px solid rgba(255, 224, 130, 0.3); }
+  .badge.unknown   { background: rgba(148, 163, 184, 0.15); color: #e4e4e7; border: 1px solid rgba(148, 163, 184, 0.3); }
+
+  .log-empty { color: var(--muted); font-size: 0.9rem; padding: 24px; text-align: center; font-style: italic; }
+
+  /* ── No data placeholder ── */
+  .no-data {
+    display: flex; align-items: center; justify-content: center;
+    height: 160px; color: var(--muted); font-size: 0.9rem;
+    background: rgba(255,255,255,0.08); border-radius: 8px;
+    border: 1px dashed var(--border);
+  }
+
+  /* ── Prob bar ── */
+  .prob-bar-wrap { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .prob-bar { flex: 1; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; }
+  .prob-bar-fill { height: 100%; border-radius: 3px; transition: width .5s; box-shadow: 0 0 8px currentColor; }
+  .prob-label { font-size: 0.75rem; color: var(--muted); width: 36px; text-align: right; font-weight: 500; }
+  
+  /* ── Animations ── */
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+  
+  /* Scrollbar custom (Dark) */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    <h1>Fitbit 健康仪表板</h1>
+  </div>
+  <div class="header-right">
+    <div class="status-badge">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">连接中...</span>
+    </div>
+    <span class="last-update" id="lastUpdate">-</span>
+    <button class="refresh-btn" id="sleepDiffBtn" onclick="openSleepDiff()">睡眠差异看板</button>
+    <button class="refresh-btn" id="refreshBtn" onclick="manualRefresh()">立即刷新</button>
+  </div>
+</header>
+
+<!-- 健康告警横幅（有告警时显示） -->
+<div class="alert-banner" id="alertBanner">
+  <div class="alert-title" id="alertTitle">⚠ 健康提醒</div>
+  <div class="alert-items" id="alertItems"></div>
+</div>
+
+<!-- 睡眠状态横幅 -->
+<div class="sleep-banner" id="sleepBanner">
+  <div class="sleep-main">
+    <div class="sleep-emoji" id="sleepEmoji">⏳</div>
+    <div>
+      <div class="sleep-state-text" id="sleepStateText">检测中...</div>
+      <div class="sleep-reason" id="sleepReason">等待数据</div>
+      <div class="prob-bar-wrap" id="probBarWrap" style="display:none;margin-top:8px;max-width:200px">
+        <div class="prob-bar"><div class="prob-bar-fill" id="probBarFill"></div></div>
+        <span class="prob-label" id="probLabel"></span>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+    <div id="policyPillWrap"></div>
+    <div class="sleep-since" id="sleepSince"></div>
+    <div class="sleep-since" id="sleepChecked" style="font-size:0.75rem;opacity:0.6"></div>
+  </div>
+</div>
+
+<!-- 摘要卡片 -->
+<div class="stats-grid">
+  <div class="stat-card hr">
+    <div class="stat-label"><span class="stat-icon">♥</span> 心率</div>
+    <div class="stat-value" id="hrVal">--<span class="stat-unit">bpm</span></div>
+    <div class="stat-sub" id="hrSub">-</div>
+  </div>
+  <div class="stat-card st">
+    <div class="stat-label"><span class="stat-icon">👟</span> 今日步数</div>
+    <div class="stat-value" id="stVal">--</div>
+    <div class="stat-sub" id="stSub">-</div>
+  </div>
+  <div class="stat-card sp">
+    <div class="stat-label"><span class="stat-icon">🫁</span> 最近睡眠血氧</div>
+    <div class="stat-value" id="spVal">--<span class="stat-unit">%</span></div>
+    <div class="stat-sub" id="spSub">睡眠期间采集</div>
+  </div>
+  <div class="stat-card lag">
+    <div class="stat-label"><span class="stat-icon">⏱</span> 数据延迟</div>
+    <div class="stat-value" id="lagVal">--<span class="stat-unit" style="font-size:0.85rem">min</span></div>
+    <div class="stat-sub" id="lagSub">-</div>
+  </div>
+</div>
+
+<!-- 心率图表 -->
+<div class="chart-card">
+  <div class="chart-header">
+    <div class="chart-title">
+      <div class="chart-dot" style="background:var(--hr-color)"></div>
+      心率（今日 1min 粒度）
+    </div>
+    <div class="chart-meta" id="hrMeta">-</div>
+  </div>
+  <div class="chart-scroll-view" id="hrWrap">
+    <div class="no-data" id="hrEmpty">暂无数据</div>
+    <div class="chart-body">
+      <canvas id="hrChart" style="display:none"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- 步数图表 -->
+<div class="chart-card">
+  <div class="chart-header">
+    <div class="chart-title">
+      <div class="chart-dot" style="background:var(--st-color)"></div>
+      步数（今日每分钟）
+    </div>
+    <div class="chart-meta" id="stMeta">-</div>
+  </div>
+  <div class="chart-scroll-view" id="stWrap">
+    <div class="no-data" id="stEmpty">暂无数据</div>
+    <div class="chart-body">
+      <canvas id="stChart" style="display:none"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- 血氧图表 -->
+<div class="chart-card">
+  <div class="chart-header">
+    <div class="chart-title">
+      <div class="chart-dot" style="background:var(--sp-color)"></div>
+      血氧 SpO₂（今日）
+    </div>
+    <div class="chart-meta" id="spMeta">-</div>
+  </div>
+  <div class="chart-scroll-view" id="spWrap">
+    <div class="no-data" id="spEmpty">睡眠期间才有数据</div>
+    <div class="chart-body">
+      <canvas id="spChart" style="display:none"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- 近7天睡眠报告 -->
+<div class="sleep-report-card" id="sleepReportCard">
+  <div class="section-title">🌙 近期睡眠报告</div>
+  <div id="sleepReportContent">
+    <div class="log-empty">加载中...</div>
+  </div>
+</div>
+
+<!-- 睡眠日志 -->
+<div class="log-card">
+  <div class="log-head">
+    <div class="log-title">📋 睡眠状态记录</div>
+    <div class="log-controls">
+      <label>显示
+        <select id="logLimit" class="log-control">
+          <option value="100">100 条</option>
+          <option value="300" selected>300 条</option>
+          <option value="1000">1000 条</option>
+          <option value="3000">3000 条</option>
+        </select>
+      </label>
+      <label>筛选
+        <select id="logFilter" class="log-control">
+          <option value="all" selected>全部</option>
+          <option value="changed">仅状态切换</option>
+          <option value="sleep_enter">仅入睡判定</option>
+        </select>
+      </label>
+      <button id="logRefreshBtn" class="log-control log-control-btn" onclick="loadLog()">刷新</button>
+    </div>
+  </div>
+  <div class="log-meta" id="logMeta">加载中...</div>
+  <div id="logContent"><div class="log-empty">暂无记录</div></div>
+</div>
+
+<script>
+// ── Chart.js 全局默认 ─────────────────────────────────────────────────────
+Chart.defaults.color = '#e4e4e7';
+Chart.defaults.borderColor = '#334155';
+Chart.defaults.font.family = "'Roboto', -apple-system, 'Segoe UI', sans-serif";
+Chart.defaults.font.weight = '500';
+
+// 莫奈色系定义 (Night Mode)
+const hrColor = '#ff8a80'; // Red A100
+const stColor = '#a5d6a7'; // Green 200
+const spColor = '#9fa8da'; // Indigo 200
+
+let hrChart = null, stChart = null, spChart = null;
+
+// ── 工具函数 ──────────────────────────────────────────────────────────────
+
+function thin(arr, step) {
+  if (arr.length <= 200) return arr;
+  return arr.filter((_, i) => i % step === 0);
+}
+
+function makeGradient(ctx, color) {
+  const g = ctx.createLinearGradient(0, 0, 0, 180);
+  g.addColorStop(0, color + '55'); // 半透明
+  g.addColorStop(1, color + '00'); // 完全透明
+  return g;
+}
+
+// ── 图表初始化 ────────────────────────────────────────────────────────────
+
+function buildLineChart(canvasId, color, yLabel, yMin, yMax) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{
+      data: [],
+      borderColor: color,
+      backgroundColor: makeGradient(ctx, color),
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointHoverBackgroundColor: '#fff',
+      pointHoverBorderColor: color,
+      pointHoverBorderWidth: 2,
+      tension: 0.4,
+      fill: true,
+    }]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e2538', // Darker background
+          titleColor: '#e2e8f0', // Lighter text
+          bodyColor: '#e4e4e7',
+          borderColor: 'rgba(255,255,255,0.05)',
+          borderWidth: 1,
+          padding: 10,
+          boxPadding: 4,
+          usePointStyle: true,
+          titleFont: { weight: 'bold' },
+          callbacks: { label: ctx => ` ${ctx.parsed.y} ${yLabel}` }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#242b3d', drawBorder: false }, ticks: { maxTicksLimit: 8, maxRotation: 0, color: '#94a3b8' } },
+        y: {
+          grid: { color: '#242b3d', borderDash: [4, 4], drawBorder: false },
+          min: yMin,
+          max: yMax,
+          ticks: { callback: v => v + ' ' + yLabel, color: '#94a3b8' }
+        }
+      }
+    }
+  });
+}
+
+function buildBarChart(canvasId, color) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type: 'bar',
+    data: { labels: [], datasets: [{
+      data: [],
+      backgroundColor: color,
+      borderRadius: 4,
+      barThickness: 'flex',
+      maxBarThickness: 12
+    }]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e2538',
+          titleColor: '#e2e8f0',
+          bodyColor: '#e4e4e7',
+          borderColor: 'rgba(255,255,255,0.05)',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: { label: ctx => ` ${ctx.parsed.y} 步` }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0, color: '#94a3b8' } },
+        y: { grid: { color: '#242b3d', borderDash: [4, 4], drawBorder: false }, ticks: { callback: v => v + ' 步', color: '#94a3b8' } }
+      }
+    }
+  });
+}
+
+
+function makeGradient(ctx, color) {
+  const g = ctx.createLinearGradient(0, 0, 0, 180);
+  g.addColorStop(0, color + '66'); // 更通透的起始色
+  g.addColorStop(1, color + '05'); // 几乎透明的结束色
+  return g;
+}
+
+function fmtMin(min) {
+  if (min == null) return '--';
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h > 0 ? `${h}h${m > 0 ? m + 'm' : ''}` : `${m}m`;
+}
+
+function fmtDate(ds) {
+  if (!ds) return '--';
+  const d = new Date(ds + 'T00:00:00');
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// ── 图表初始化 ────────────────────────────────────────────────────────────
+
+function buildLineChart(canvasId, color, yLabel, yMin, yMax) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{
+      data: [],
+      borderColor: color,
+      backgroundColor: makeGradient(ctx, color),
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointHoverBackgroundColor: '#fff',
+      pointHoverBorderColor: color,
+      pointHoverBorderWidth: 2,
+      tension: 0.4, // 更柔和的曲线
+      fill: true,
+    }]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#ffffff',
+          titleColor: '#455a64',
+          bodyColor: '#546e7a',
+          borderColor: 'rgba(0,0,0,0.05)',
+          borderWidth: 1,
+          padding: 10,
+          boxPadding: 4,
+          usePointStyle: true,
+          titleFont: { weight: 'bold' },
+          callbacks: { label: ctx => ` ${ctx.parsed.y} ${yLabel}` }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#f1f3f4', drawBorder: false }, ticks: { maxTicksLimit: 8, maxRotation: 0 } },
+        y: {
+          grid: { color: '#f1f3f4', borderDash: [4, 4], drawBorder: false },
+          min: yMin,
+          max: yMax,
+          ticks: { callback: v => v + ' ' + yLabel }
+        }
+      }
+    }
+  });
+}
+
+function buildBarChart(canvasId, color) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type: 'bar',
+    data: { labels: [], datasets: [{
+      data: [],
+      backgroundColor: color,
+      borderRadius: 4,
+      barThickness: 'flex',
+      maxBarThickness: 12
+    }]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#ffffff',
+          titleColor: '#455a64',
+          bodyColor: '#546e7a',
+          borderColor: 'rgba(0,0,0,0.05)',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: { label: ctx => ` ${ctx.parsed.y} 步` }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0 } },
+        y: { grid: { color: '#f1f3f4', borderDash: [4, 4], drawBorder: false }, ticks: { callback: v => v + ' 步' } }
+      }
+    }
+  });
+}
+
+// ── 图表更新（动态Y轴范围）────────────────────────────────────────────────
+
+function updateChart(chart, rawData, valueKey, yPad) {
+  // 允许横向滚动，减少数据稀释
+  const step = Math.max(1, Math.floor(rawData.length / 2000));
+  const data = thin(rawData, step);
+  const vals = data.map(d => d[valueKey || 'value']).filter(v => v != null);
+  
+  chart.data.labels = data.map(d => d.time.slice(0, 5));
+  chart.data.datasets[0].data = data.map(d => d[valueKey || 'value']);
+
+  // 动态计算宽度以支持滚动
+  const canvas = chart.canvas;
+  const body = canvas.parentElement;
+  if (body && body.classList.contains('chart-body')) {
+    const scrollParent = body.parentElement;
+    // 基础宽度至少填满容器，每点至少 6px
+    const minW = scrollParent.clientWidth;
+    const reqW = Math.max(minW, data.length * 6);
+    body.style.width = reqW + 'px';
+    chart.resize();
+  }
+
+  // 动态调整 Y 轴
+  if (vals.length > 0 && chart.options.scales.y) {
+    const pad = yPad || 5;
+    const lo = Math.min(...vals) - pad;
+    const hi = Math.max(...vals) + pad;
+    // 只在非固定范围时动态更新
+    if (chart._dynamicY) {
+      chart.options.scales.y.min = Math.max(0, Math.floor(lo / 5) * 5);
+      chart.options.scales.y.max = Math.ceil(hi / 5) * 5;
+    }
+  }
+  chart.update('none');
+}
+
+function showCanvas(emptyId, canvasId, hasData) {
+  const empty = document.getElementById(emptyId);
+  const canvas = document.getElementById(canvasId);
+  if (empty) empty.style.display = hasData ? 'none' : 'flex';
+  if (canvas) {
+      canvas.style.display = hasData ? 'block' : 'none';
+      // Hide parent .chart-body if no data to collapse height?
+      // No, keep it simple.
+  }
+}
+
+// ── 健康告警渲染 ─────────────────────────────────────────────────────────
+
+const ALERT_LABELS = {
+  high_hr:        '持续高心率',
+  low_spo2:       '持续低血氧',
+  sleep_recovery: '睡眠恢复下降',
+  temperature:    '体温异常',
+};
+
+function renderAlerts(healthContext) {
+  const alerts = (healthContext && healthContext.alerts) || [];
+  const banner = document.getElementById('alertBanner');
+  const titleEl = document.getElementById('alertTitle');
+  const itemsEl = document.getElementById('alertItems');
+
+  if (!alerts.length) {
+    banner.classList.remove('show', 'high', 'medium');
+    return;
+  }
+
+  // 取最高严重级别
+  const hasHigh = alerts.some(a => a.severity === 'high');
+  banner.classList.add('show');
+  banner.classList.remove('high', 'medium');
+  banner.classList.add(hasHigh ? 'high' : 'medium');
+  titleEl.textContent = hasHigh ? '⚠ 健康告警' : '! 健康提示';
+
+  itemsEl.innerHTML = alerts.map(a => {
+    const label = ALERT_LABELS[a.type] || a.type;
+    let detail = '';
+    if (a.type === 'high_hr' && a.current_hr)
+      detail = ` ${a.current_hr} bpm`;
+    else if (a.type === 'low_spo2' && a.current_spo2)
+      detail = ` ${a.current_spo2}%`;
+    else if (a.type === 'sleep_recovery' && a.duration_drop_ratio)
+      detail = ` 时长降 ${Math.round(a.duration_drop_ratio * 100)}%`;
+    else if (a.type === 'temperature' && a.delta)
+      detail = ` Δ${a.delta > 0 ? '+' : ''}${a.delta}°`;
+    return `<span class="alert-item">${label}${detail}</span>`;
+  }).join('');
+}
+
+// ── Agent Policy 渲染 ────────────────────────────────────────────────────
+
+const POLICY_LABELS = {
+  sleep_protect: { icon: '🔕', text: '睡眠保护', cls: 'sleep_protect' },
+  cautious:      { icon: '🔇', text: '谨慎模式', cls: 'cautious' },
+  normal:        { icon: '🔔', text: '正常模式', cls: 'normal' },
+};
+
+function renderPolicy(policy) {
+  const wrap = document.getElementById('policyPillWrap');
+  if (!policy || !policy.mode) { wrap.innerHTML = ''; return; }
+  const p = POLICY_LABELS[policy.mode] || { icon: '❓', text: policy.mode, cls: 'cautious' };
+  wrap.innerHTML = `<span class="policy-pill ${p.cls}">${p.icon} ${p.text}${policy.delay_min > 0 ? ' · 延迟 ' + policy.delay_min + 'min' : ''}</span>`;
+}
+
+// ── 睡眠概率条渲染 ───────────────────────────────────────────────────────
+
+function renderProbBar(signals) {
+  const wrap = document.getElementById('probBarWrap');
+  const fill = document.getElementById('probBarFill');
+  const label = document.getElementById('probLabel');
+  const prob = signals && signals.sleep_prob;
+  if (prob == null) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'flex';
+  const pct = Math.round(prob * 100);
+  // Deep Monet Palette: Indigo 200, Amber 200, Green 200
+  const color = prob >= 0.75 ? '#9fa8da' : prob >= 0.35 ? '#ffe082' : '#a5d6a7';
+  fill.style.width = pct + '%';
+  fill.style.background = color;
+  fill.style.boxShadow = `0 0 8px ${color}`;
+  label.textContent = pct + '%';
+  label.title = signals.prob_source === 'ml' ? 'ML模型' : '规则估算';
+}
+
+// ── 主数据渲染 ────────────────────────────────────────────────────────────
+
+function render(payload) {
+  const collapseSleepState = (state) => state === 'uncertain' ? 'sleeping' : (state || 'unknown');
+  const s = payload.summary || {};
+  const signals = payload.signals || {};
+  const dataMeta = payload.data_meta || {};
+
+  // 心率卡片
+  document.getElementById('hrVal').innerHTML =
+    (s.heart_rate ?? '--') + '<span class="stat-unit">bpm</span>';
+  const latestHr = payload.heart_rate?.slice(-1)[0];
+  const hrRange = payload.heart_rate?.length >= 2
+    ? (() => { const vals = payload.heart_rate.slice(-20).map(d => d.value); return `范围 ${Math.min(...vals)}–${Math.max(...vals)} bpm`; })()
+    : '';
+  document.getElementById('hrSub').textContent =
+    latestHr ? `最新 ${latestHr.time.slice(0,5)} · ${hrRange}` : '-';
+
+  // 步数卡片（修复：显示正确的步数相关信息）
+  document.getElementById('stVal').textContent =
+    s.steps != null ? s.steps.toLocaleString() : '--';
+  const activeMin = (payload.steps || []).filter(d => d.value > 0).length;
+  document.getElementById('stSub').textContent =
+    activeMin > 0 ? `活跃 ${activeMin} 分钟` : '今日暂无活动';
+
+  // 血氧卡片
+  const spData = payload.spo2 || [];
+  document.getElementById('spVal').innerHTML =
+    (s.spo2 ?? '--') + '<span class="stat-unit">%</span>';
+  const spo2Time = dataMeta.latest_sleep_spo2_time;
+  const spo2Lag = dataMeta.spo2_lag_min;
+  if (spo2Time) {
+    document.getElementById('spSub').textContent =
+      `睡眠样本 ${spo2Time.slice(0,5)}${spo2Lag != null ? ' · 距今 ' + spo2Lag + ' min' : ''}`;
+  } else if (spData.length > 1) {
+    const spVals = spData.map(d => d.value);
+    document.getElementById('spSub').textContent =
+      `${spData.length} 条睡眠样本 · 范围 ${Math.min(...spVals).toFixed(1)}–${Math.max(...spVals).toFixed(1)}%`;
+  } else {
+    document.getElementById('spSub').textContent = '仅表示最近一次睡眠估算值';
+  }
+
+  // 数据延迟卡片
+  const lag = dataMeta.data_lag_min ?? signals.data_lag_min;
+  document.getElementById('lagVal').innerHTML =
+    (lag != null ? lag : '--') + '<span class="stat-unit" style="font-size:0.85rem">min</span>';
+  const lagColor = lag == null ? '' : lag > 30 ? 'color:#f59e0b' : lag > 15 ? 'color:#fbbf24' : 'color:#22c55e';
+  const lagStatus = lag == null ? '-' : lag > 30 ? '数据较旧' : lag > 15 ? '轻微延迟' : '数据新鲜';
+  document.getElementById('lagSub').innerHTML = `<span style="${lagColor}">${lagStatus}</span>${dataMeta.poll_time ? ' · ' + dataMeta.poll_time.slice(11,16) + ' 轮询' : ''}`;
+
+  // 心率图表
+  const hrData = payload.heart_rate || [];
+  showCanvas('hrEmpty', 'hrChart', hrData.length > 0);
+  if (hrData.length > 0) {
+    if (!hrChart) {
+      hrChart = buildLineChart('hrChart', hrColor, 'bpm', 40, 180);
+      hrChart._dynamicY = true;  // 启用动态Y轴
+    }
+    updateChart(hrChart, hrData, 'value', 8);
+    document.getElementById('hrMeta').textContent =
+      `${hrData.length} 条 · 最新 ${hrData.slice(-1)[0].time.slice(0,5)}`;
+  }
+
+  // 步数图表
+  const stData = (payload.steps || []).filter(d => d.value > 0);
+  showCanvas('stEmpty', 'stChart', stData.length > 0);
+  if (stData.length > 0) {
+    if (!stChart) stChart = buildBarChart('stChart', stColor);
+    updateChart(stChart, stData, 'value', 5);
+    document.getElementById('stMeta').textContent =
+      `活跃 ${stData.length} 分钟 · 共 ${s.steps?.toLocaleString()} 步`;
+  }
+
+  // 血氧图表
+  showCanvas('spEmpty', 'spChart', spData.length > 0);
+  if (spData.length > 0) {
+    if (!spChart) {
+      spChart = buildLineChart('spChart', spColor, '%', 90, 100);
+      spChart._dynamicY = true;
+    }
+    updateChart(spChart, spData, 'value', 1);
+    document.getElementById('spMeta').textContent =
+      `${spData.length} 条 · 最新 ${spData.slice(-1)[0].value}%`;
+  }
+
+  // 睡眠状态横幅
+  const sl = payload.sleep || {};
+  const displaySleepState = collapseSleepState(sl.state);
+  const banner = document.getElementById('sleepBanner');
+  const stateMap = {
+    sleeping:  { emoji: '😴', text: '睡眠中',   cls: 'sleeping'  },
+    awake:     { emoji: '☀️', text: '清醒',     cls: 'awake'     },
+    unknown:   { emoji: '⏳', text: '检测中...', cls: ''          },
+  };
+  const m = stateMap[displaySleepState] || stateMap.unknown;
+  banner.className = `sleep-banner ${m.cls}`;
+  document.getElementById('sleepEmoji').textContent     = m.emoji;
+  document.getElementById('sleepStateText').textContent = m.text;
+  document.getElementById('sleepReason').textContent    = sl.reason || '';
+  document.getElementById('sleepSince').textContent     = sl.since ? `自 ${sl.since.slice(11,16)} 起` : '';
+  document.getElementById('sleepChecked').textContent   =
+    payload.last_updated ? `最后检测于 ${payload.last_updated}` : '';
+
+  renderProbBar(signals);
+  renderPolicy(payload.agent_policy);
+  renderAlerts(payload.health_context);
+
+  // 更新时间
+  if (payload.last_updated) {
+    document.getElementById('lastUpdate').textContent = `更新于 ${payload.last_updated}`;
+  }
+}
+
+// ── 睡眠周报 ─────────────────────────────────────────────────────────────
+
+function loadSleepReport() {
+  fetch('/api/sleep_report?days=7')
+    .then(r => r.json())
+    .then(data => {
+      const el = document.getElementById('sleepReportContent');
+      if (!data || data.error) {
+        el.innerHTML = '<div class="log-empty">睡眠报告不可用（需 Fitbit 授权）</div>';
+        return;
+      }
+      const sum = data.summary || {};
+      const days = (data.days || []).slice().reverse(); // 最新在前
+
+      const summaryHTML = `
+        <div class="sleep-summary-grid">
+          <div class="sleep-metric">
+            <div class="sleep-metric-label">平均时长</div>
+            <div class="sleep-metric-value">${fmtMin(sum.avg_duration_min)}</div>
+          </div>
+          <div class="sleep-metric">
+            <div class="sleep-metric-label">平均效率</div>
+            <div class="sleep-metric-value">${sum.avg_efficiency != null ? Math.round(sum.avg_efficiency) : '--'}<span class="sleep-metric-unit">%</span></div>
+          </div>
+          <div class="sleep-metric">
+            <div class="sleep-metric-label">平均深睡</div>
+            <div class="sleep-metric-value">${fmtMin(sum.avg_deep_min)}</div>
+          </div>
+          <div class="sleep-metric">
+            <div class="sleep-metric-label">平均 REM</div>
+            <div class="sleep-metric-value">${fmtMin(sum.avg_rem_min)}</div>
+          </div>
+          <div class="sleep-metric">
+            <div class="sleep-metric-label">平均 HRV</div>
+            <div class="sleep-metric-value">${sum.avg_hrv_ms != null ? sum.avg_hrv_ms : '--'}<span class="sleep-metric-unit">ms</span></div>
+          </div>
+          <div class="sleep-metric">
+            <div class="sleep-metric-label">有数据天数</div>
+            <div class="sleep-metric-value">${sum.days_with_data ?? '--'}<span class="sleep-metric-unit">/ ${sum.days_requested ?? 7}</span></div>
+          </div>
+        </div>`;
+
+      const daysHTML = days.map(d => {
+        if (d.no_data) return `
+          <div class="sleep-day-cell no-data">
+            <div class="sleep-day-date">${fmtDate(d.date)}</div>
+            <div class="sleep-day-dur">--</div>
+            <div class="sleep-day-eff">无数据</div>
+            <div class="eff-bar"><div class="eff-bar-fill" style="width:0%"></div></div>
+          </div>`;
+        const eff = d.efficiency || 0;
+        // Deep Monet: Green 200, Indigo 200, Amber 200
+        const effColor = eff >= 90 ? '#a5d6a7' : eff >= 80 ? '#9fa8da' : '#ffe082';
+        return `
+          <div class="sleep-day-cell" title="${d.date}&#10;${d.start_time || ''}–${d.end_time || ''}&#10;深睡 ${fmtMin(d.deep_min)} · REM ${fmtMin(d.rem_min)}">
+            <div class="sleep-day-date">${fmtDate(d.date)}</div>
+            <div class="sleep-day-dur" style="color:${effColor}">${fmtMin(d.duration_min)}</div>
+            <div class="sleep-day-eff">效率 ${eff}%</div>
+            ${d.hrv_ms != null ? `<div class="sleep-day-hrv">HRV ${d.hrv_ms}ms</div>` : ''}
+            <div class="eff-bar"><div class="eff-bar-fill" style="width:${Math.min(100, eff)}%;background:${effColor};box-shadow:0 0 5px ${effColor}"></div></div>
+          </div>`;
+      }).join('');
+
+      el.innerHTML = summaryHTML + `<div class="sleep-days-grid">${daysHTML}</div>`;
+    })
+    .catch(() => {
+      document.getElementById('sleepReportContent').innerHTML =
+        '<div class="log-empty">获取睡眠报告失败</div>';
+    });
+}
+
+// ── 睡眠日志 ─────────────────────────────────────────────────────────────
+
+let logLimit = 300;
+let logFilter = 'all';
+
+function initLogControls() {
+  const limitEl = document.getElementById('logLimit');
+  const filterEl = document.getElementById('logFilter');
+  if (!limitEl || !filterEl) return;
+  limitEl.value = String(logLimit);
+  filterEl.value = logFilter;
+  limitEl.addEventListener('change', () => {
+    logLimit = Number(limitEl.value) || 300;
+    loadLog();
+  });
+  filterEl.addEventListener('change', () => {
+    logFilter = filterEl.value || 'all';
+    loadLog();
+  });
+}
+
+function buildLogQuery() {
+  const params = new URLSearchParams();
+  params.set('limit', String(logLimit));
+  if (logFilter === 'changed') {
+    params.set('changed_only', 'true');
+  } else if (logFilter === 'sleep_enter') {
+    params.set('changed_only', 'true');
+    params.set('state', 'sleeping');
+  }
+  return params.toString();
+}
+
+function loadLog() {
+  fetch(`/api/sleep_log?${buildLogQuery()}`)
+    .then(r => r.json())
+    .then(entries => {
+      const el = document.getElementById('logContent');
+      const metaEl = document.getElementById('logMeta');
+      const filterTxt =
+        logFilter === 'sleep_enter' ? '仅入睡判定' :
+        logFilter === 'changed' ? '仅状态切换' : '全部记录';
+      metaEl.textContent = `当前显示 ${entries.length} 条 · ${filterTxt} · 按时间倒序`;
+      if (!entries.length) {
+        el.innerHTML = '<div class="log-empty">当前筛选下暂无记录</div>';
+        return;
+      }
+      el.innerHTML = `
+        <div class="log-scroll">
+        <table class="log-table">
+          <thead><tr>
+            <th>拉取时间</th><th>数据时间</th><th>延迟</th>
+            <th>状态</th><th>判断依据</th>
+            <th>睡眠概率</th><th>心率</th><th>步数</th><th>最近睡眠血氧</th>
+          </tr></thead>
+          <tbody>${entries.map(e => {
+            const prob = (e.signals || {}).sleep_prob;
+            const probTxt = prob != null ? `${Math.round(prob * 100)}%` : '-';
+            const displayState = e.state === 'uncertain' ? 'sleeping' : e.state;
+            // Deep Monet: Indigo 200, Amber 200, Green 200
+            const probColor = prob == null ? '' : prob >= 0.75 ? '#9fa8da' : prob >= 0.35 ? '#ffe082' : '#a5d6a7';
+            return `
+            <tr style="${e.changed ? 'background:rgba(255, 224, 130, 0.05)' : ''}">
+              <td>${e.poll_time ?? e.time}${e.changed ? ' <span style="color:#ffe082;font-size:0.7rem;text-shadow:0 0 5px rgba(255,224,130,0.3)">● 切换</span>' : ''}</td>
+              <td style="color:#e4e4e7">${e.data_time ?? '-'}</td>
+              <td style="color:${(e.data_lag_min ?? 0) > 15 ? '#ffe082' : '#e4e4e7'}">${e.data_lag_min != null ? e.data_lag_min + ' min' : '-'}</td>
+              <td><span class="badge ${displayState}">${
+                displayState === 'sleeping'  ? '😴 睡眠' :
+                displayState === 'awake'     ? '☀️ 清醒' : '⏳ 检测中'
+              }</span></td>
+              <td class="log-reason">${e.reason}</td>
+              <td style="color:${probColor};font-variant-numeric:tabular-nums;text-shadow:0 0 5px ${probColor}44">${probTxt}</td>
+              <td>${e.heart_rate ?? '-'} bpm</td>
+              <td>${e.steps_today?.toLocaleString() ?? '-'}</td>
+              <td title="${e.spo2_time ? `睡眠样本 ${e.spo2_time}` : '无睡眠血氧时间'}">${
+                e.spo2 != null
+                  ? `${e.spo2}%${e.spo2_time ? ` @ ${String(e.spo2_time).slice(0,5)}` : ''}`
+                  : '-'
+              }</td>
+            </tr>`;
+          }).join('')}
+          </tbody>
+        </table>
+        </div>`;
+    })
+    .catch(() => {
+      const metaEl = document.getElementById('logMeta');
+      document.getElementById('logContent').innerHTML = '<div class="log-empty">获取记录失败</div>';
+      if (metaEl) metaEl.textContent = '日志拉取失败';
+    });
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────
+
+function setStatus(connected) {
+  document.getElementById('statusDot').className = 'status-dot' + (connected ? ' connected' : '');
+  document.getElementById('statusText').textContent = connected ? '已连接' : '重连中...';
+}
+
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen  = () => setStatus(true);
+  ws.onclose = () => { setStatus(false); setTimeout(connect, 3000); };
+  ws.onerror = () => ws.close();
+  ws.onmessage = e => {
+    try { render(JSON.parse(e.data)); } catch {}
+  };
+}
+
+function manualRefresh() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = '刷新中...';
+  fetch('/api/refresh').finally(() => {
+    setTimeout(() => { btn.disabled = false; btn.textContent = '立即刷新'; }, 3000);
+  });
+}
+
+function openSleepDiff() {
+  const btn = document.getElementById('sleepDiffBtn');
+  if (!btn) {
+    location.href = '/sleep-diff';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '准备中...';
+  // 1. 先触发后端构建（缺模型会自动训练）。
+  // 2. 构建成功后在新标签页打开差异看板。
+  // 3. 无论成功失败都恢复按钮状态。
+  fetch('/api/sleep_diff/build')
+    .then(r => r.json())
+    .then(resp => {
+      if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'build_failed');
+      location.href = '/sleep-diff';
+    })
+    .catch(err => {
+      alert('睡眠差异看板生成失败: ' + (err && err.message ? err.message : 'unknown'));
+    })
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = '睡眠差异看板';
+    });
+}
+
+function warmupSleepDiff() {
+  fetch('/api/sleep_diff/build').catch(() => {});
+}
+
+// 状态变化时刷新日志和睡眠报告
+const _origRender = render;
+let _lastState = null;
+render = function(payload) {
+  _origRender(payload);
+  if (payload.sleep?.state !== _lastState) {
+    _lastState = payload.sleep?.state;
+    loadLog();
+  }
+};
+
+// ── 初始化 ────────────────────────────────────────────────────────────────
+
+fetch('/api/data')
+  .then(r => r.json())
+  .then(render)
+  .catch(() => {});
+
+initLogControls();
+loadLog();
+loadSleepReport();
+warmupSleepDiff();
+connect();
+
+// 每30分钟刷新一次睡眠报告（不依赖 WebSocket 状态变化）
+setInterval(loadSleepReport, 30 * 60 * 1000);
+</script>
+</body>
+</html>

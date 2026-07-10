@@ -1,0 +1,9 @@
+mcp==1.26.0
+requests==2.32.5
+fastapi==0.136.1
+uvicorn[standard]==0.41.0
+websockets==16.0
+numpy==2.4.4
+scikit-learn==1.8.0
+scipy==1.17.1
+joblib==1.5.3

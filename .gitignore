@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+monitor.config.toml
+monitor.config.local.toml
+monitor.runtime.log
+tokens.json
+sleep_log.jsonl
+sleep_labels.json
+sleep_model.pkl
+stat_events*.json
+backups/
+logs/
+monitor/static/sleep_diff_report.html
+
