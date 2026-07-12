@@ -11,7 +11,6 @@ from agent.plugins import ManagedServiceSpec, McpServerSpec, Plugin, ProactiveSo
 
 class FitbitProactiveConfig(BaseModel):
     enabled: bool = True
-    poll_interval_seconds: int = Field(default=300, ge=1)
 
 
 class FitbitConfig(BaseModel):
@@ -20,7 +19,7 @@ class FitbitConfig(BaseModel):
 
 class FitbitPlugin(Plugin):
     name = "fitbit"
-    version = "1.1.0"
+    version = "1.1.1"
     desc = "Fitbit health monitor and sleep model"
     ConfigModel = FitbitConfig
 
@@ -44,7 +43,6 @@ class FitbitPlugin(Plugin):
         config = cast(FitbitConfig, self.context.config)
         if not config.proactive.enabled:
             return []
-        interval = config.proactive.poll_interval_seconds
         return [
             ProactiveSourceSpec(
                 id="health_alerts",
@@ -52,14 +50,12 @@ class FitbitPlugin(Plugin):
                 server="fitbit",
                 fetch_tool="get_proactive_events",
                 ack_tool="acknowledge_events",
-                poll_interval_seconds=interval,
             ),
             ProactiveSourceSpec(
                 id="sleep_context",
                 channels=("context",),
                 server="fitbit",
                 fetch_tool="get_sleep_context",
-                poll_interval_seconds=interval,
             ),
         ]
 

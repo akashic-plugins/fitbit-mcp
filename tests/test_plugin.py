@@ -15,6 +15,7 @@ def test_declares_mcp_and_both_proactive_channels() -> None:
     sources = plugin.proactive_sources()
     assert [source.id for source in sources] == ["health_alerts", "sleep_context"]
     assert [source.channels for source in sources] == [("alert",), ("context",)]
+    assert all(not hasattr(source, "poll_interval_seconds") for source in sources)
 
 
 def test_proactive_can_be_disabled() -> None:
