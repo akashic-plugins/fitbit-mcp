@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 HOST = os.getenv("FITBIT_MONITOR_HOST", "127.0.0.1")
 PORT = os.getenv("FITBIT_MONITOR_PORT", "18765")
 BASE_URL = f"http://{HOST}:{PORT}"
+_last_wake_presence = "unknown"
 
 
 def _monitor_available(timeout: float = 1.0) -> bool:
@@ -92,7 +93,7 @@ def _build_sleep_context(data: dict) -> dict:
         summary += f"，数据延迟约 {lag} 分钟"
     summary += "。这是对用户当前睡眠状态的概率判断，不保证 100% 准确。"
 
-    return {
+    payload = {
         "topic": "Fitbit 睡眠状态判断",
         "summary": summary,
         "hint": (
@@ -112,6 +113,74 @@ def _build_sleep_context(data: dict) -> dict:
         },
         "health_event_count": len(data.get("health_events") or []),
     }
+    return _with_wake_contract(payload, state=state, probability=prob)
+
+
+def _with_wake_contract(
+    payload: dict,
+    *,
+    state: str,
+    probability: object,
+    observed_at: datetime | None = None,
+) -> dict:
+    global _last_wake_presence
+    presence = {
+        "sleeping": "sleeping",
+        "awake": "active",
+    }.get(state, "unknown")
+    probability_value = _bounded_probability(probability)
+    confidence = (
+        probability_value
+        if presence == "sleeping"
+        else 1.0 - probability_value
+        if presence == "active"
+        else 0.0
+    )
+    interruptibility = {
+        "sleeping": 0.0,
+        "active": 0.85,
+        "unknown": 0.4,
+    }[presence]
+    transition = ""
+    if _last_wake_presence != "unknown" and presence != _last_wake_presence:
+        transition = f"{_last_wake_presence}->{presence}"
+    if presence != "unknown":
+        _last_wake_presence = presence
+    observed = observed_at or datetime.now(timezone.utc)
+    original = dict(payload)
+    return {
+        **original,
+        "presence": presence,
+        "interruptibility": interruptibility,
+        "confidence": round(confidence, 3),
+        "transition": transition,
+        "observed_at": observed.isoformat(),
+        "expires_at": (observed + timedelta(minutes=10)).isoformat(),
+        "payload": original,
+    }
+
+
+def _bounded_probability(value: object) -> float:
+    try:
+        return min(1.0, max(0.0, float(str(value))))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def _unavailable_sleep_context(hint: str) -> dict:
+    payload = {
+        "available": False,
+        "topic": "",
+        "summary": "",
+        "hint": hint,
+        "sleep": {
+            "state": "unknown",
+            "prob": None,
+            "prob_source": "unavailable",
+            "data_lag_min": None,
+        },
+    }
+    return _with_wake_contract(payload, state="unknown", probability=None)
 
 
 def create_mcp_server() -> FastMCP:
@@ -145,35 +214,15 @@ def create_mcp_server() -> FastMCP:
         except requests.exceptions.ConnectionError:
             logger.warning("fitbit-monitor 未运行 (%s)", BASE_URL)
             return json.dumps(
-                {
-                    "available": False,
-                    "topic": "",
-                    "summary": "",
-                    "hint": "Fitbit 睡眠判断当前不可用；即使可用，它也只是概率判断，不保证 100% 准确。",
-                    "sleep": {
-                        "state": "unknown",
-                        "prob": None,
-                        "prob_source": "unavailable",
-                        "data_lag_min": None,
-                    },
-                },
+                _unavailable_sleep_context(
+                    "Fitbit 睡眠判断当前不可用；即使可用，它也只是概率判断，不保证 100% 准确。"
+                ),
                 ensure_ascii=False,
             )
         except Exception as e:
             logger.error("get_sleep_context 失败: %s", e)
             return json.dumps(
-                {
-                    "available": False,
-                    "topic": "",
-                    "summary": "",
-                    "hint": f"Fitbit 睡眠判断拉取失败: {e}",
-                    "sleep": {
-                        "state": "unknown",
-                        "prob": None,
-                        "prob_source": "unavailable",
-                        "data_lag_min": None,
-                    },
-                },
+                _unavailable_sleep_context(f"Fitbit 睡眠判断拉取失败: {e}"),
                 ensure_ascii=False,
             )
 
