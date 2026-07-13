@@ -19,7 +19,7 @@ class FitbitConfig(BaseModel):
 
 class FitbitPlugin(Plugin):
     name = "fitbit"
-    version = "1.1.1"
+    version = "1.1.2"
     desc = "Fitbit health monitor and sleep model"
     ConfigModel = FitbitConfig
 

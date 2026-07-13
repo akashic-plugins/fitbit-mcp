@@ -110,7 +110,6 @@ class HealthEventV2Engine:
     仅离线回放使用：
     - 急性静息心血管压力（acute_cardio_stress）
     - 心肺耦合压力（cardio_respiratory_strain）
-    - 恢复债（recovery_debt）
     """
 
     def __init__(self) -> None:
@@ -120,7 +119,7 @@ class HealthEventV2Engine:
         self._hr_run = 0
         self._hr_peak_z = 0.0
         self._strain_run = 0
-        self._daily: dict[str, dict[str, Any]] = {}
+        self._spo2_seen: set[str] = set()
         self._active_sleep_session_key: str | None = None
         self._last_sleep_session_key: str | None = None
         self._last_sleep_session_end_dt: datetime | None = None
@@ -128,13 +127,11 @@ class HealthEventV2Engine:
     def process(self, rows: list[dict[str, Any]]) -> list[V2Event]:
         for row in rows:
             self._process_row(row)
-        self._emit_recovery_debt()
         return list(self._events)
 
     def ingest_row(self, row: dict[str, Any]) -> list[V2Event]:
         before = len(self._events)
         self._process_row(row)
-        self._emit_recovery_debt()
         return self._events[before:]
 
     def _sync_sleep_session_state(self, dt: datetime, sleeping_like: bool) -> None:
@@ -158,16 +155,6 @@ class HealthEventV2Engine:
             return self._last_sleep_session_key
         return None
 
-    @staticmethod
-    def _refresh_day_spo2_values(day: dict[str, Any]) -> None:
-        sessions = day.get("_spo2_sessions") or {}
-        vals: list[float] = []
-        for samples in sessions.values():
-            med = _median([float(x) for x in samples if x is not None])
-            if med is not None:
-                vals.append(med)
-        day["night_spo2"] = vals
-
     def _process_row(self, row: dict[str, Any]) -> None:
         dt = _parse_dt(row.get("poll_time"))
         if dt is None:
@@ -186,34 +173,15 @@ class HealthEventV2Engine:
         is_resting = zero_steps >= 16
         quality = self._quality_score(lag)
 
-        # 日级聚合（恢复债）
         dkey = dt.strftime("%Y-%m-%d")
-        day = self._daily.setdefault(
-            dkey,
-            {
-                "sleeping_polls": 0,
-                "night_spo2": [],
-                "rows": 0,
-                "_spo2_seen": set(),
-                "_spo2_sessions": {},
-            },
-        )
-        day["rows"] += 1
-        if sleeping_like:
-            day["sleeping_polls"] += 1
         spo2_time = row.get("spo2_time")
         spo2_hms = _parse_hms(spo2_time)
         session_key = None
         if spo2 is not None and spo2_hms is not None:
             spo2_key = f"{dkey} {spo2_hms[0]:02d}:{spo2_hms[1]:02d}:{spo2_hms[2]:02d}"
-            seen = day["_spo2_seen"]
-            if spo2_key not in seen:
-                seen.add(spo2_key)
+            if spo2_key not in self._spo2_seen:
+                self._spo2_seen.add(spo2_key)
                 session_key = self._resolve_spo2_session_key(dt)
-                if session_key is not None:
-                    sessions = day["_spo2_sessions"]
-                    sessions.setdefault(session_key, []).append(spo2)
-                    self._refresh_day_spo2_values(day)
 
         spo2_for_history = spo2 if session_key is not None else None
         spo2_for_strain = (
@@ -488,83 +456,6 @@ class HealthEventV2Engine:
             tone="优先关怀，建议先休息补水并观察状态变化",
         )
 
-    def _emit_recovery_debt(self) -> None:
-        dates = sorted(self._daily.keys())
-        if len(dates) < 10:
-            return
-        for i in range(9, len(dates)):
-            cur_dates = dates[max(0, i - 2) : i + 1]  # 最近3天
-            base_dates = dates[max(0, i - 9) : i - 2]  # 前7天
-            if len(cur_dates) < 3 or len(base_dates) < 5:
-                continue
-            cur_sleep = []
-            base_sleep = []
-            cur_night_spo2 = []
-            base_night_spo2 = []
-            for d in cur_dates:
-                item = self._daily[d]
-                cur_sleep.append(item["sleeping_polls"] * 5)
-                if item["night_spo2"]:
-                    cur_night_spo2.append(_median(item["night_spo2"]))
-            for d in base_dates:
-                item = self._daily[d]
-                base_sleep.append(item["sleeping_polls"] * 5)
-                if item["night_spo2"]:
-                    base_night_spo2.append(_median(item["night_spo2"]))
-
-            cur_sleep_avg = _median([x for x in cur_sleep if x is not None] or [])
-            base_sleep_avg = _median([x for x in base_sleep if x is not None] or [])
-            cur_spo2_avg = _median([x for x in cur_night_spo2 if x is not None] or [])
-            base_spo2_avg = _median([x for x in base_night_spo2 if x is not None] or [])
-            if (
-                cur_sleep_avg is None
-                or base_sleep_avg is None
-                or cur_spo2_avg is None
-                or base_spo2_avg is None
-                or base_sleep_avg <= 0
-            ):
-                continue
-
-            sleep_drop_ratio = (base_sleep_avg - cur_sleep_avg) / base_sleep_avg
-            spo2_drop = base_spo2_avg - cur_spo2_avg
-            if sleep_drop_ratio < 0.22 and not (
-                sleep_drop_ratio >= 0.15 and spo2_drop >= 1.2
-            ):
-                continue
-
-            event_day = _parse_dt(f"{dates[i]} 12:00:00")
-            if event_day is None:
-                continue
-            if not self._cooldown_ok("recovery_debt", event_day, minutes=18 * 60):
-                continue
-            severe = sleep_drop_ratio >= 0.30 or spo2_drop >= 1.8
-            severity = "high" if severe else "medium"
-            confidence = min(
-                0.95,
-                0.54 + 0.22 * min(0.5, sleep_drop_ratio) + 0.12 * min(3.0, spo2_drop),
-            )
-            self._append_event(
-                event_type="recovery_debt",
-                severity=severity,
-                confidence=confidence,
-                message="近几天恢复指标较个人基线有下降趋势",
-                dt=event_day,
-                metrics={
-                    "recent_3d_sleep_min_median": round(cur_sleep_avg, 1),
-                    "baseline_7d_sleep_min_median": round(base_sleep_avg, 1),
-                    "sleep_drop_ratio": round(sleep_drop_ratio, 3),
-                    "recent_3d_night_spo2_median": round(cur_spo2_avg, 2),
-                    "baseline_7d_night_spo2_median": round(base_spo2_avg, 2),
-                    "night_spo2_drop": round(spo2_drop, 2),
-                },
-                reasons=[
-                    "连续多天睡眠恢复时间下降",
-                    "夜间血氧中位数同步走低",
-                ],
-                tone="温和提醒作息与恢复，不做疾病推断",
-            )
-
-
 def load_log_rows(
     *,
     log_path: str,
@@ -606,7 +497,6 @@ class HealthEventV2Runtime:
     EXPIRY_HOURS: dict[str, int] = {
         "acute_cardio_stress": 6,
         "cardio_respiratory_strain": 10,
-        "recovery_debt": 36,
     }
     ACK_KEEP_MAX = 5000
 
@@ -626,6 +516,9 @@ class HealthEventV2Runtime:
             if isinstance(pending, list):
                 for e in pending:
                     if not isinstance(e, dict):
+                        continue
+                    # 升级后不再恢复旧版本遗留的恢复债事件。
+                    if e.get("type") == "recovery_debt":
                         continue
                     eid = str(e.get("id", "")).strip()
                     if eid:
