@@ -383,8 +383,6 @@ class HealthEventV2Engine:
 
         # 1. 重复轮询不能增加持续时长或累计证据
         if not is_new_evidence:
-            if quality < 1.0 or state == "sleeping" or not is_resting:
-                self._reset_hr_episode()
             return
 
         # 2. 只接纳新鲜、持续静止且非睡眠的心率窗口
@@ -414,7 +412,7 @@ class HealthEventV2Engine:
         if self._hr_episode_active or len(self._hr_windows) < 3:
             return
         window_span_min = (self._hr_windows[-1] - self._hr_windows[0]).total_seconds() / 60.0
-        if window_span_min < 25 or self._hr_cusum < 6.0:
+        if window_span_min < 25 or self._hr_cusum < 5.0:
             return
 
         # 4. 同一段连续异常只生成一次提醒
