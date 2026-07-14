@@ -116,8 +116,11 @@ class HealthEventV2Engine:
         self._events: list[V2Event] = []
         self._history: deque[dict[str, Any]] = deque(maxlen=20000)
         self._cooldown_until: dict[str, datetime] = {}
-        self._hr_run = 0
+        self._hr_cusum = 0.0
+        self._hr_windows: deque[datetime] = deque(maxlen=12)
         self._hr_peak_z = 0.0
+        self._hr_episode_active = False
+        self._last_hr_evidence_id: str | None = None
         self._strain_run = 0
         self._spo2_seen: set[str] = set()
         self._active_sleep_session_key: str | None = None
@@ -170,8 +173,16 @@ class HealthEventV2Engine:
         spo2 = _safe_float(row.get("spo2"))
         spo2_lag_min = _safe_float(row.get("spo2_lag_min"))
         zero_steps = int(signals.get("zero_steps_count", 0) or 0)
+        sustained_zero_min = int(signals.get("sustained_zero_min", 0) or 0)
         is_resting = zero_steps >= 16
         quality = self._quality_score(lag)
+        evidence_id = str(signals.get("evidence_id") or "").strip()
+        if not evidence_id:
+            data_time = str(row.get("data_time") or "").strip()
+            evidence_id = f"{dt:%Y-%m-%d} {data_time}" if data_time else f"{dt:%Y-%m-%d %H:%M}"
+        is_new_hr_evidence = evidence_id != self._last_hr_evidence_id
+        if is_new_hr_evidence:
+            self._last_hr_evidence_id = evidence_id
 
         dkey = dt.strftime("%Y-%m-%d")
         spo2_time = row.get("spo2_time")
@@ -209,8 +220,10 @@ class HealthEventV2Engine:
             hr_z=hr_z,
             base_hr=base_hr_med,
             is_resting=is_resting,
+            sustained_zero_min=sustained_zero_min,
             state=state,
             quality=quality,
+            is_new_evidence=is_new_hr_evidence,
         )
         self._detect_cardio_respiratory_strain(
             dt=dt,
@@ -230,6 +243,7 @@ class HealthEventV2Engine:
                 "lag": lag,
                 "quality": quality,
                 "is_resting": is_resting,
+                "evidence_id": evidence_id,
                 "hr": hr,
                 "spo2": spo2_for_history,
             }
@@ -249,30 +263,45 @@ class HealthEventV2Engine:
         return 0.35
 
     def _hr_baseline(self, now_dt: datetime) -> tuple[float | None, float]:
+        """计算过去 28 天同一时段的去重静息心率基线。"""
+
+        # 1. 选取同一昼夜时段，排除最近 24 小时的自相关数据
         vals: list[float] = []
+        seen_evidence: set[str] = set()
         cutoff_recent = now_dt - timedelta(hours=24)
-        cutoff_old = now_dt - timedelta(days=21)
+        cutoff_old = now_dt - timedelta(days=28)
+        now_minute = now_dt.hour * 60 + now_dt.minute
         for e in self._history:
             dt = e["dt"]
             if dt < cutoff_old or dt >= cutoff_recent:
                 continue
-            if e["quality"] < 0.75:
+            minute = dt.hour * 60 + dt.minute
+            clock_distance = abs(minute - now_minute)
+            clock_distance = min(clock_distance, 24 * 60 - clock_distance)
+            if clock_distance > 90:
+                continue
+            if e["quality"] < 1.0:
                 continue
             if not e["is_resting"]:
                 continue
             if e["state"] == "sleeping":
                 continue
+            evidence_id = str(e["evidence_id"])
+            if evidence_id in seen_evidence:
+                continue
+            seen_evidence.add(evidence_id)
             hr = e["hr"]
             if hr is not None:
                 vals.append(float(hr))
+
+        # 2. 用中位数和 MAD 构造抗离群值基线
         if len(vals) < 20:
-            return None, 8.0
+            return None, 5.0
         med = _median(vals)
         if med is None:
-            return None, 8.0
+            return None, 5.0
         mad = _mad(vals, med)
-        # robust scale: 1.4826 * MAD；给最小下限，避免过敏触发
-        scale = max(1.4826 * mad, 4.0)
+        scale = max(1.4826 * mad, 5.0)
         return med, scale
 
     def _spo2_baseline(self, now_dt: datetime) -> float | None:
@@ -345,64 +374,88 @@ class HealthEventV2Engine:
         hr_z: float | None,
         base_hr: float | None,
         is_resting: bool,
+        sustained_zero_min: int,
         state: str,
         quality: float,
+        is_new_evidence: bool,
     ) -> None:
+        """用去重窗口和单侧 CUSUM 检测持续静息心率升高。"""
+
+        # 1. 重复轮询不能增加持续时长或累计证据
+        if not is_new_evidence:
+            if quality < 1.0 or state == "sleeping" or not is_resting:
+                self._reset_hr_episode()
+            return
+
+        # 2. 只接纳新鲜、持续静止且非睡眠的心率窗口
         if (
             hr is None
             or hr_z is None
             or base_hr is None
             or state == "sleeping"
             or not is_resting
-            or quality < 0.75
+            or sustained_zero_min < 20
+            or quality < 1.0
         ):
-            self._hr_run = 0
-            self._hr_peak_z = 0.0
+            self._reset_hr_episode()
             return
 
-        if hr_z >= 2.2:
-            self._hr_run += 1
-            self._hr_peak_z = max(self._hr_peak_z, hr_z)
-        else:
-            self._hr_run = 0
-            self._hr_peak_z = 0.0
+        hr_delta = hr - base_hr
+        if hr_z < 2.5 or hr_delta < 15.0:
+            self._reset_hr_episode()
             return
 
-        if self._hr_run < 3:
+        # 3. 累积连续偏高程度，并要求三个窗口覆盖至少 25 分钟
+        if self._hr_windows and (dt - self._hr_windows[-1]).total_seconds() > 20 * 60:
+            self._reset_hr_episode()
+        self._hr_cusum = max(0.0, self._hr_cusum + hr_z - 1.0)
+        self._hr_windows.append(dt)
+        self._hr_peak_z = max(self._hr_peak_z, hr_z)
+        if self._hr_episode_active or len(self._hr_windows) < 3:
             return
-        if hr >= 120 and self._hr_run < 4:
-            return
-        if not self._cooldown_ok("acute_cardio_stress", dt, minutes=120):
+        window_span_min = (self._hr_windows[-1] - self._hr_windows[0]).total_seconds() / 60.0
+        if window_span_min < 25 or self._hr_cusum < 6.0:
             return
 
-        severe = hr >= 120 and self._hr_run >= 4
+        # 4. 同一段连续异常只生成一次提醒
+        self._hr_episode_active = True
+        severe = hr >= 120 or self._hr_peak_z >= 4.0
         severity = "high" if severe else "medium"
         confidence = min(
             0.98,
-            0.58
-            + 0.08 * min(4, self._hr_run)
-            + 0.07 * min(3, max(0.0, self._hr_peak_z - 2.2))
-            + 0.08 * quality,
+            0.62
+            + 0.04 * min(8.0, self._hr_cusum)
+            + 0.06 * min(3.0, max(0.0, self._hr_peak_z - 2.5)),
         )
         self._append_event(
             event_type="acute_cardio_stress",
             severity=severity,
             confidence=confidence,
-            message=f"静息状态心率持续偏高（约 {self._hr_run * 5} 分钟）",
+            message=f"静息状态心率持续偏高（至少 {round(window_span_min)} 分钟）",
             dt=dt,
             metrics={
                 "hr": round(hr, 1),
                 "baseline_hr": round(base_hr, 1),
+                "hr_delta": round(hr_delta, 1),
                 "hr_z": round(hr_z, 2),
-                "run_polls": self._hr_run,
+                "cusum": round(self._hr_cusum, 2),
+                "unique_windows": len(self._hr_windows),
+                "window_span_min": round(window_span_min, 1),
             },
             reasons=[
                 "低活动状态（zero_steps_count>=16）",
+                "持续静止至少 20 分钟",
                 "排除睡眠状态",
-                "个体基线偏离达到持续阈值",
+                "同一时段个体基线偏离达到持续阈值",
             ],
             tone="先关心体感与是否在活动/紧张，不直接下结论",
         )
+
+    def _reset_hr_episode(self) -> None:
+        self._hr_cusum = 0.0
+        self._hr_windows.clear()
+        self._hr_peak_z = 0.0
+        self._hr_episode_active = False
 
     def _detect_cardio_respiratory_strain(
         self,
@@ -416,21 +469,19 @@ class HealthEventV2Engine:
         state: str,
         quality: float,
     ) -> None:
-        cond = (
-            hr is not None
-            and hr_z is not None
-            and spo2 is not None
-            and is_resting
-            and state != "sleeping"
-            and quality >= 0.8
-            and hr_z >= 2.0
-            and spo2 <= spo2_threshold
-        )
-        if cond:
-            self._strain_run += 1
-        else:
+        if (
+            hr is None
+            or hr_z is None
+            or spo2 is None
+            or not is_resting
+            or state == "sleeping"
+            or quality < 0.8
+            or hr_z < 2.0
+            or spo2 > spo2_threshold
+        ):
             self._strain_run = 0
             return
+        self._strain_run += 1
         if self._strain_run < 2:
             return
         if not self._cooldown_ok("cardio_respiratory_strain", dt, minutes=360):
