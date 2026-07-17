@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
+import plugin as plugin_module
 from plugin import FitbitConfig, FitbitPlugin
 
 
@@ -27,3 +32,53 @@ def test_proactive_can_be_disabled() -> None:
     )()
 
     assert plugin.proactive_sources() == []
+
+
+def test_declares_plugin_owned_mobile_health_panel() -> None:
+    assert FitbitPlugin.mobile_ui_module() == "mobile_panel.js"
+    assert FitbitPlugin.mobile_ui_stylesheet() == "mobile_panel.css"
+
+
+def test_mobile_health_panel_uses_reader_and_rejects_unknown_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {"current": {"heart_rate": 72}}
+    history = {"sleep_days": []}
+
+    class Reader:
+        def get_current(self) -> dict[str, object]:
+            return current
+
+        def get_sleep_history(self) -> dict[str, object]:
+            return history
+
+    monkeypatch.setattr(plugin_module, "FitbitMobileDashboardReader", Reader)
+    plugin = FitbitPlugin()
+
+    current_result = asyncio.run(
+        plugin.mobile_ui_call(
+            "fitbit.current",
+            {},
+            session_id=None,
+            turn_id=None,
+        )
+    )
+    history_result = asyncio.run(
+        plugin.mobile_ui_call(
+            "fitbit.sleep_history",
+            {},
+            session_id=None,
+            turn_id=None,
+        )
+    )
+    assert current_result == current
+    assert history_result == history
+    with pytest.raises(ValueError, match="未知 fitbit 移动方法"):
+        asyncio.run(
+            plugin.mobile_ui_call(
+                "fitbit.write",
+                {},
+                session_id=None,
+                turn_id=None,
+            )
+        )

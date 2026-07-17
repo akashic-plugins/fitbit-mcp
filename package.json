@@ -1,0 +1,11 @@
+{
+  "name": "akashic-fitbit-mobile-panel",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:mobile": "node --test tests/test_mobile_panel.mjs"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.13"
+  }
+}
