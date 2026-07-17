@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,11 +10,16 @@ from plugin import FitbitMobileDashboardReader
 
 
 class Response:
-    def __init__(self, payload: object) -> None:
+    def __init__(self, payload: object, status_code: int = 200) -> None:
         self._payload = payload
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:
-        return None
+        if self.status_code >= 400:
+            raise plugin.requests.HTTPError(
+                f"HTTP {self.status_code}",
+                response=SimpleNamespace(status_code=self.status_code),
+            )
 
     def json(self) -> object:
         return self._payload
@@ -109,6 +115,29 @@ def test_sleep_history_projection_only_reads_report(
             "no_data": False,
         }
     ]
+    assert overview["available"] is True
+
+
+def test_sleep_history_projects_expired_oauth_as_a_panel_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plugin.requests,
+        "get",
+        lambda *args, **kwargs: Response({"error": "unauthorized"}, 401),
+    )
+
+    assert FitbitMobileDashboardReader().get_sleep_history() == {
+        "available": False,
+        "reason": "fitbit_oauth_required",
+        "sleep_summary": {
+            "days_with_data": 0,
+            "avg_duration_min": None,
+            "avg_efficiency": None,
+            "avg_deep_min": None,
+        },
+        "sleep_days": [],
+    }
 
 
 def test_current_minute_sleep_segment_keeps_a_visible_duration() -> None:

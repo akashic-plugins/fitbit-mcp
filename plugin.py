@@ -46,12 +46,29 @@ class FitbitMobileDashboardReader:
         """投影七天睡眠摘要与逐日记录。"""
 
         # 1. 在独立 HTTP 失败域取得七天报告
-        report = self._get_json("/api/sleep_report", params={"days": 7})
+        try:
+            report = self._get_json("/api/sleep_report", params={"days": 7})
+        except requests.HTTPError as error:
+            if error.response is None or error.response.status_code != 401:
+                raise
+            return {
+                "available": False,
+                "reason": "fitbit_oauth_required",
+                "sleep_summary": {
+                    "days_with_data": 0,
+                    "avg_duration_min": None,
+                    "avg_efficiency": None,
+                    "avg_deep_min": None,
+                },
+                "sleep_days": [],
+            }
 
         # 2. 只投影移动端历史浏览需要的字段
         summary = _mapping(report, "summary")
         days = _list_of_mappings(report, "days")
         return {
+            "available": True,
+            "reason": None,
             "sleep_summary": {
                 "days_with_data": _optional_number(summary, "days_with_data"),
                 "avg_duration_min": _optional_number(summary, "avg_duration_min"),

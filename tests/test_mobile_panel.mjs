@@ -121,6 +121,26 @@ test("sleep history survives current failure", async () => {
   assert.match(host.querySelector(".fitbit-mobile-week-summary").textContent, /效率 96%/);
 });
 
+test("expired Fitbit authorization stays inside the health panel", async () => {
+  const { document, window } = parseHTML('<main id="host"></main>');
+  globalThis.document = document;
+  globalThis.window = window;
+  const host = document.querySelector("#host");
+  panel.default.dashboard.mount(host, {
+    request(method) {
+      return method === "fitbit.current"
+        ? Promise.resolve(current)
+        : Promise.resolve({ available: false, reason: "fitbit_oauth_required" });
+    },
+  });
+
+  await flush();
+  const historyStatus = host.querySelector('[data-status="history"]');
+  assert.match(historyStatus.textContent, /Fitbit 授权已过期/);
+  assert.equal(historyStatus.querySelector("button").hidden, true);
+  assert.equal(host.querySelector('[data-current="heart"]').textContent, "72");
+});
+
 test("pending requests cannot mutate the panel after unmount", async () => {
   const { document, window } = parseHTML('<main id="host"></main>');
   globalThis.document = document;

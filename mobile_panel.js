@@ -197,6 +197,11 @@ const dashboard = {
       setStatus(historyStatus, "正在读取睡眠历史…");
       context.request("fitbit.sleep_history").then((overview) => {
         if (!active) return;
+        if (overview.available === false && overview.reason === "fitbit_oauth_required") {
+          setStatus(historyStatus, "Fitbit 授权已过期，请在电脑端重新授权", { error: true });
+          historyContent.hidden = true;
+          return;
+        }
         const summary = overview.sleep_summary || {};
         host.querySelector('[data-week="coverage"]').textContent = `${number(summary.days_with_data)} / 7 天有数据`;
         host.querySelector(".fitbit-mobile-week-summary").textContent = [
