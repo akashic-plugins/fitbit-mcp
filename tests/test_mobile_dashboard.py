@@ -42,6 +42,13 @@ CURRENT_PAYLOAD = {
 }
 
 HISTORY_PAYLOAD = {
+    "available": True,
+    "reason": None,
+    "freshness": {
+        "state": "fresh",
+        "age_seconds": 120,
+        "projected_at": "2026-07-17T10:00:00+08:00",
+    },
     "summary": {
         "days_with_data": 7,
         "avg_duration_min": 372.7,
@@ -92,7 +99,7 @@ def test_current_projection_only_reads_health_snapshot(
     ]
 
 
-def test_sleep_history_projection_only_reads_report(
+def test_sleep_history_projection_only_reads_local_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, object]] = []
@@ -105,7 +112,7 @@ def test_sleep_history_projection_only_reads_report(
     monkeypatch.setattr(plugin, "_MONITOR_URL", "http://monitor")
     overview = FitbitMobileDashboardReader().get_sleep_history()
 
-    assert calls == [("http://monitor/api/sleep_report", {"days": 7})]
+    assert calls == [("http://monitor/api/mobile/sleep_projection", None)]
     assert overview["sleep_days"] == [
         {
             "date": "2026-07-16",
@@ -118,18 +125,33 @@ def test_sleep_history_projection_only_reads_report(
     assert overview["available"] is True
 
 
-def test_sleep_history_projects_expired_oauth_as_a_panel_state(
+def test_sleep_history_projects_missing_background_projection_as_a_panel_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         plugin.requests,
         "get",
-        lambda *args, **kwargs: Response({"error": "unauthorized"}, 401),
+        lambda *args, **kwargs: Response(
+            {
+                "available": False,
+                "reason": "projection_not_ready",
+                "freshness": {"state": "missing", "age_seconds": None},
+                "summary": {
+                    "days_requested": 7,
+                    "days_with_data": 0,
+                    "avg_duration_min": None,
+                    "avg_efficiency": None,
+                    "avg_deep_min": None,
+                },
+                "days": [],
+            }
+        ),
     )
 
     assert FitbitMobileDashboardReader().get_sleep_history() == {
         "available": False,
-        "reason": "fitbit_oauth_required",
+        "reason": "projection_not_ready",
+        "freshness": {"state": "missing", "age_seconds": None},
         "sleep_summary": {
             "days_with_data": 0,
             "avg_duration_min": None,

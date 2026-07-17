@@ -18,6 +18,7 @@ const current = {
 };
 
 const history = {
+  freshness: { state: "fresh", age_seconds: 120 },
   sleep_summary: { days_with_data: 1, avg_duration_min: 373, avg_efficiency: 96, avg_deep_min: 95 },
   sleep_days: [{ date: "2026-07-16", duration_min: 373, efficiency: 96, deep_min: 95, no_data: false }],
 };
@@ -27,8 +28,7 @@ function flush() {
 }
 
 test("mobile navigation describes the health task", () => {
-  assert.equal(panel.default.navigation.label, "健康状态");
-  assert.match(panel.default.navigation.description, /心率、血氧、步数和最近睡眠/);
+  assert.equal(panel.default.navigation, undefined);
   assert.equal(typeof panel.default.dashboard.mount, "function");
 });
 
@@ -71,7 +71,7 @@ test("current health survives history failure and retries only history", async (
   const calls = [];
   let historyAttempts = 0;
   const context = {
-    request(method) {
+    query(method) {
       calls.push(method);
       if (method === "fitbit.current") return Promise.resolve(current);
       historyAttempts += 1;
@@ -108,7 +108,7 @@ test("sleep history survives current failure", async () => {
   globalThis.window = window;
   const host = document.querySelector("#host");
   panel.default.dashboard.mount(host, {
-    request(method) {
+    query(method) {
       return method === "fitbit.current"
         ? Promise.reject(new Error("snapshot unavailable"))
         : Promise.resolve(history);
@@ -121,24 +121,44 @@ test("sleep history survives current failure", async () => {
   assert.match(host.querySelector(".fitbit-mobile-week-summary").textContent, /效率 96%/);
 });
 
-test("expired Fitbit authorization stays inside the health panel", async () => {
+test("missing background projection stays inside the health panel", async () => {
   const { document, window } = parseHTML('<main id="host"></main>');
   globalThis.document = document;
   globalThis.window = window;
   const host = document.querySelector("#host");
   panel.default.dashboard.mount(host, {
-    request(method) {
+    query(method) {
       return method === "fitbit.current"
         ? Promise.resolve(current)
-        : Promise.resolve({ available: false, reason: "fitbit_oauth_required" });
+        : Promise.resolve({ available: false, reason: "projection_not_ready" });
     },
   });
 
   await flush();
   const historyStatus = host.querySelector('[data-status="history"]');
-  assert.match(historyStatus.textContent, /Fitbit 授权已过期/);
+  assert.match(historyStatus.textContent, /投影尚未生成/);
   assert.equal(historyStatus.querySelector("button").hidden, true);
   assert.equal(host.querySelector('[data-current="heart"]').textContent, "72");
+});
+
+test("stale sleep projection remains visible with an explicit freshness label", async () => {
+  const { document, window } = parseHTML('<main id="host"></main>');
+  globalThis.document = document;
+  globalThis.window = window;
+  const host = document.querySelector("#host");
+  panel.default.dashboard.mount(host, {
+    query(method) {
+      return method === "fitbit.current"
+        ? Promise.resolve(current)
+        : Promise.resolve({ ...history, freshness: { state: "stale", age_seconds: 5000 } });
+    },
+  });
+
+  await flush();
+  const summary = host.querySelector(".fitbit-mobile-week-summary");
+  assert.match(summary.textContent, /后台数据待刷新/);
+  assert.equal(summary.classList.contains("is-stale"), true);
+  assert.equal(host.querySelectorAll(".fitbit-mobile-day").length, 1);
 });
 
 test("pending requests cannot mutate the panel after unmount", async () => {
@@ -148,7 +168,7 @@ test("pending requests cannot mutate the panel after unmount", async () => {
   const host = document.querySelector("#host");
   const resolvers = [];
   const unmount = panel.default.dashboard.mount(host, {
-    request() {
+    query() {
       return new Promise((resolve) => resolvers.push(resolve));
     },
   });

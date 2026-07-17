@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 import plugin as plugin_module
@@ -35,8 +33,10 @@ def test_proactive_can_be_disabled() -> None:
 
 
 def test_declares_plugin_owned_mobile_health_panel() -> None:
-    assert FitbitPlugin.mobile_ui_module() == "mobile_panel.js"
-    assert FitbitPlugin.mobile_ui_stylesheet() == "mobile_panel.css"
+    contribution = FitbitPlugin.mobile_ui()
+    assert contribution.module == "mobile_panel.js"
+    assert contribution.stylesheet == "mobile_panel.css"
+    assert contribution.navigation.label == "健康状态"
 
 
 def test_mobile_health_panel_uses_reader_and_rejects_unknown_methods(
@@ -55,30 +55,24 @@ def test_mobile_health_panel_uses_reader_and_rejects_unknown_methods(
     monkeypatch.setattr(plugin_module, "FitbitMobileDashboardReader", Reader)
     plugin = FitbitPlugin()
 
-    current_result = asyncio.run(
-        plugin.mobile_ui_call(
-            "fitbit.current",
-            {},
-            session_id=None,
-            turn_id=None,
-        )
+    current_result = plugin.mobile_ui_query(
+        "fitbit.current",
+        {},
+        session_id=None,
+        turn_id=None,
     )
-    history_result = asyncio.run(
-        plugin.mobile_ui_call(
-            "fitbit.sleep_history",
-            {},
-            session_id=None,
-            turn_id=None,
-        )
+    history_result = plugin.mobile_ui_query(
+        "fitbit.sleep_history",
+        {},
+        session_id=None,
+        turn_id=None,
     )
     assert current_result == current
     assert history_result == history
     with pytest.raises(ValueError, match="未知 fitbit 移动方法"):
-        asyncio.run(
-            plugin.mobile_ui_call(
-                "fitbit.write",
-                {},
-                session_id=None,
-                turn_id=None,
-            )
+        plugin.mobile_ui_query(
+            "fitbit.write",
+            {},
+            session_id=None,
+            turn_id=None,
         )

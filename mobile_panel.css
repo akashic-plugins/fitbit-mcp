@@ -239,6 +239,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.fitbit-mobile-week-summary.is-stale {
+  color: var(--m-warning);
+}
+
 .fitbit-mobile-days {
   margin: 0;
   padding: 0;

@@ -160,7 +160,7 @@ const dashboard = {
 
     const loadCurrent = () => {
       setStatus(currentStatus, "正在读取当前健康状态…");
-      context.request("fitbit.current").then((overview) => {
+      context.query("fitbit.current").then((overview) => {
         if (!active) return;
         const freshness = overview.freshness || {};
         const current = overview.current || {};
@@ -195,20 +195,25 @@ const dashboard = {
 
     const loadHistory = () => {
       setStatus(historyStatus, "正在读取睡眠历史…");
-      context.request("fitbit.sleep_history").then((overview) => {
+      context.query("fitbit.sleep_history").then((overview) => {
         if (!active) return;
-        if (overview.available === false && overview.reason === "fitbit_oauth_required") {
-          setStatus(historyStatus, "Fitbit 授权已过期，请在电脑端重新授权", { error: true });
+        if (overview.available === false && overview.reason === "projection_not_ready") {
+          setStatus(historyStatus, "睡眠历史投影尚未生成，请等待后台首次同步", { error: true });
           historyContent.hidden = true;
           return;
         }
         const summary = overview.sleep_summary || {};
+        const freshness = overview.freshness || {};
         host.querySelector('[data-week="coverage"]').textContent = `${number(summary.days_with_data)} / 7 天有数据`;
-        host.querySelector(".fitbit-mobile-week-summary").textContent = [
+        const summaryNode = host.querySelector(".fitbit-mobile-week-summary");
+        const summaryParts = [
           `平均 ${durationLabel(summary.avg_duration_min)}`,
           `效率 ${number(summary.avg_efficiency)}%`,
           `深睡 ${durationLabel(summary.avg_deep_min)}`,
-        ].join(" · ");
+        ];
+        if (freshness.state === "stale") summaryParts.push("后台数据待刷新");
+        summaryNode.textContent = summaryParts.join(" · ");
+        summaryNode.classList.toggle("is-stale", freshness.state === "stale");
         const days = Array.isArray(overview.sleep_days) ? overview.sleep_days : [];
         host.querySelector(".fitbit-mobile-days").replaceChildren(...days.map(sleepDayRow));
         host.querySelector('[data-empty="history"]').hidden = days.length !== 0;
@@ -235,9 +240,5 @@ const dashboard = {
 
 export default {
   slots: {},
-  navigation: {
-    label: "健康状态",
-    description: "查看当前心率、血氧、步数和最近睡眠节律",
-  },
   dashboard,
 };

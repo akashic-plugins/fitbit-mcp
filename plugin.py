@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,7 +8,15 @@ from typing import cast
 import requests
 from pydantic import BaseModel, Field
 
-from agent.plugins import ManagedServiceSpec, McpServerSpec, Plugin, ProactiveSourceSpec
+from agent.plugins import (
+    ManagedServiceSpec,
+    McpServerSpec,
+    MobileUiContribution,
+    MobileUiNavigation,
+    Plugin,
+    ProactiveSourceSpec,
+)
+from agent.plugins.mobile_ui import MobileUiRpcInvalidRequest
 
 
 _MONITOR_URL = "http://127.0.0.1:18765"
@@ -45,15 +52,13 @@ class FitbitMobileDashboardReader:
     def get_sleep_history(self) -> dict[str, object]:
         """投影七天睡眠摘要与逐日记录。"""
 
-        # 1. 在独立 HTTP 失败域取得七天报告
-        try:
-            report = self._get_json("/api/sleep_report", params={"days": 7})
-        except requests.HTTPError as error:
-            if error.response is None or error.response.status_code != 401:
-                raise
+        # 1. 只读后台轮询维护的本地投影，不触发 OAuth 或 Fitbit API
+        report = self._get_json("/api/mobile/sleep_projection")
+        if not _boolean(report, "available"):
             return {
                 "available": False,
-                "reason": "fitbit_oauth_required",
+                "reason": _optional_string(report, "reason") or "projection_not_ready",
+                "freshness": _mapping(report, "freshness"),
                 "sleep_summary": {
                     "days_with_data": 0,
                     "avg_duration_min": None,
@@ -69,6 +74,7 @@ class FitbitMobileDashboardReader:
         return {
             "available": True,
             "reason": None,
+            "freshness": _mapping(report, "freshness"),
             "sleep_summary": {
                 "days_with_data": _optional_number(summary, "days_with_data"),
                 "avg_duration_min": _optional_number(summary, "avg_duration_min"),
@@ -192,17 +198,20 @@ class FitbitConfig(BaseModel):
 
 class FitbitPlugin(Plugin):
     name = "fitbit"
-    version = "1.2.0"
+    version = "1.3.0"
     desc = "Fitbit health monitor and sleep model"
     ConfigModel = FitbitConfig
 
     @classmethod
-    def mobile_ui_module(cls) -> str | None:
-        return "mobile_panel.js"
-
-    @classmethod
-    def mobile_ui_stylesheet(cls) -> str | None:
-        return "mobile_panel.css"
+    def mobile_ui(cls) -> MobileUiContribution:
+        return MobileUiContribution(
+            module="mobile_panel.js",
+            stylesheet="mobile_panel.css",
+            navigation=MobileUiNavigation(
+                label="健康状态",
+                description="查看当前心率、血氧、步数和最近睡眠节律",
+            ),
+        )
 
     @classmethod
     def mcp_servers(cls) -> list[McpServerSpec]:
@@ -240,7 +249,7 @@ class FitbitPlugin(Plugin):
             ),
         ]
 
-    async def mobile_ui_call(
+    def mobile_ui_query(
         self,
         method: str,
         payload: dict[str, object],
@@ -258,11 +267,11 @@ class FitbitPlugin(Plugin):
         }
         reader_method = readers.get(method)
         if reader_method is None:
-            raise ValueError(f"未知 fitbit 移动方法: {method}")
+            raise MobileUiRpcInvalidRequest(f"未知 fitbit 移动方法: {method}")
 
-        # 2. 本地 monitor HTTP 调用离开事件循环
+        # 2. 调度器已把同步查询隔离到专用线程池
         reader = FitbitMobileDashboardReader()
-        return await asyncio.to_thread(reader_method, reader)
+        return reader_method(reader)
 
     async def initialize(self) -> None:
         data_dir = self.context.data_dir
