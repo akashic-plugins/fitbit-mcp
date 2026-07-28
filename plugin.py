@@ -197,6 +197,7 @@ class FitbitConfig(BaseModel):
 
 
 class FitbitPlugin(Plugin):
+    api_version = 2
     name = "fitbit"
     version = "1.3.0"
     desc = "Fitbit health monitor and sleep model"
@@ -273,7 +274,7 @@ class FitbitPlugin(Plugin):
         reader = FitbitMobileDashboardReader()
         return reader_method(reader)
 
-    async def initialize(self) -> None:
+    def activate(self) -> None:
         data_dir = self.context.data_dir
         if data_dir is None:
             return
