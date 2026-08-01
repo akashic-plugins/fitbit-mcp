@@ -39,6 +39,10 @@ def test_declares_plugin_owned_mobile_health_panel() -> None:
     assert contribution.navigation.label == "健康状态"
 
 
+def test_declares_plugin_owned_dashboard_panel() -> None:
+    assert FitbitPlugin.dashboard_module() == "dashboard.py"
+
+
 def test_mobile_health_panel_uses_reader_and_rejects_unknown_methods(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

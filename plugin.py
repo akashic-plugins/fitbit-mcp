@@ -199,7 +199,7 @@ class FitbitConfig(BaseModel):
 class FitbitPlugin(Plugin):
     api_version = 2
     name = "fitbit"
-    version = "1.3.0"
+    version = "1.4.0"
     desc = "Fitbit health monitor and sleep model"
     ConfigModel = FitbitConfig
 
@@ -213,6 +213,10 @@ class FitbitPlugin(Plugin):
                 description="查看当前心率、血氧、步数和最近睡眠节律",
             ),
         )
+
+    @classmethod
+    def dashboard_module(cls) -> str:
+        return "dashboard.py"
 
     @classmethod
     def mcp_servers(cls) -> list[McpServerSpec]:

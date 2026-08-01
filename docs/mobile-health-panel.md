@@ -1,8 +1,18 @@
-# Fitbit 移动健康面板
+# Fitbit 健康界面
 
 ## 目标
 
-把适合随手查看的健康上下文带到 Akashic 手机端，同时保持 Fitbit 数据、接口和界面归插件所有。宿主只注册入口、加载资源并转发 `mobile_ui_call`，不新增 Fitbit 专用字段。
+把当前健康上下文带到 Akashic Dashboard 和手机端，同时保持 Fitbit 数据、接口和界面归插件所有。宿主只注册入口、加载资源并转发请求，不新增 Fitbit 专用字段。
+
+桌面 Dashboard 只展示 18765 的当前首屏数据：睡眠状态、心率、血氧、步数、实时心率趋势和最近 24 小时睡眠节律。旧的 `monitor/static/index.html` 与 sleep-report 对比页面不再提供；OAuth、monitor API、MCP、主动能力和移动端面板保持独立。
+
+```text
+Akashic Dashboard
+└── Fitbit 健康
+    ├── 当前状态圆环 | 心率 / 血氧 / 步数
+    ├── 最近 60 个心率采样点
+    └── 最近 24 小时睡眠节律
+```
 
 ```text
 插件抽屉
@@ -14,6 +24,9 @@
 
 ## 设计约束
 
+- 桌面面板复用 Dashboard 的真实插件工作台、主题 token 和鉴权边界，不提供第二份独立 HTML。
+- Material You 只承担信息构图：一个主状态、三个领域指标、两个趋势 surface；不生成健康总结、建议或教练式文案。
+- 心率、血氧和步数的 tonal color 是固定领域语义；警告色只表达陈旧或失败，不按每个区块任意换色。
 - 任务优先：第一屏先回答“我现在怎么样”，再提供节律和历史。
 - 颜色承担领域语义：睡眠紫、心率珊瑚、血氧青蓝、步数绿；陈旧数据才使用警告色。
 - 顶部指标是一个统一健康状态组；历史记录使用页面平面上的分隔列表，不做卡片墙。
@@ -23,6 +36,15 @@
 - 网络中断时保留明确错误并提供原位重试，不在后台无限轮询。
 
 ## 数据边界
+
+桌面 `dashboard.py` 在本地 HTTP 边界读取：
+
+- `/api/data`
+- `/api/tool/fitbit_health_snapshot`
+- `/api/refresh`
+- `/auth/start`
+
+插件集中校验 monitor payload，并通过 `/api/dashboard/fitbit/*` 只投影首屏实际渲染的字段。Dashboard 面板不读取 sleep report、模型训练报告或健康总结。
 
 `FitbitMobileDashboardReader` 位于插件入口模块中，以兼容宿主的隔离模块加载契约，并读取插件托管的本地 monitor：
 
@@ -35,11 +57,15 @@
 
 ```bash
 npm install
-npm run test:mobile
+npm test
 PYTHONPATH=/mnt/data/coding/akasic-agent:$PWD:<fitbit-cache-site-packages> \
   /mnt/data/coding/akasic-agent/.venv/bin/python -m pytest -q
 PYTHONPATH=/mnt/data/coding/akasic-agent:$PWD \
-  /mnt/data/coding/akasic-agent/.venv/bin/pyright plugin.py
+  /mnt/data/coding/akasic-agent/.venv/bin/pyright plugin.py dashboard.py
+
+# 用临时 HOME/workspace 和真实 Akashic Dashboard 外壳预览
+PYTHONPATH=/mnt/data/coding/akasic-agent:$PWD \
+  /mnt/data/coding/akasic-agent/.venv/bin/python scripts/preview_dashboard.py
 ```
 
 Pixel7 隔离环境验收：

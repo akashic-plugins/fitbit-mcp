@@ -308,15 +308,6 @@ TOKEN_FILE = _resolve_local_path(
     ),
     DEFAULT_CONFIG["files"]["token_file"],
 )
-STATIC_DIR = _resolve_local_path(
-    str(
-        _get_cfg(CONFIG, ("files", "static_dir"), DEFAULT_CONFIG["files"]["static_dir"])
-    ),
-    DEFAULT_CONFIG["files"]["static_dir"],
-)
-if str(_get_cfg(CONFIG, ("files", "static_dir"), "static")) == "static":
-    STATIC_DIR = BASE_DIR / "static"
-
 AUTH_URL = str(
     _get_cfg(CONFIG, ("fitbit", "auth_url"), DEFAULT_CONFIG["fitbit"]["auth_url"])
 )
@@ -1144,7 +1135,6 @@ def _build_sleep_diff_if_needed(force: bool = False) -> dict:
             "built": should_build,
             "model_action": model_action,
             "report_path": str(SLEEP_DIFF_REPORT_FILE),
-            "url": "/sleep-diff",
             "start_date": start_d.isoformat(),
             "end_date": end_d.isoformat(),
         }
@@ -2486,10 +2476,15 @@ def auth_start():
     return RedirectResponse(f"{AUTH_URL}?{urllib.parse.urlencode(params)}")
 
 
+@app.get("/api/auth/status")
+def auth_status():
+    return {"authorized": TOKEN_FILE.exists()}
+
+
 @app.get("/oauth/callback")
 def oauth_callback(code: str = None, error: str = None):
     if error or not code:
-        return HTMLResponse("<h2>授权失败</h2>")
+        return HTMLResponse("<h2>Fitbit 授权失败，可以关闭此窗口后重试。</h2>", status_code=400)
     r = req.post(
         TOKEN_URL,
         headers={
@@ -2507,7 +2502,10 @@ def oauth_callback(code: str = None, error: str = None):
     tokens = r.json()
     tokens["expires_at"] = time.time() + tokens.get("expires_in", 28800)
     save_tokens(tokens)
-    return RedirectResponse("/")
+    return HTMLResponse(
+        "<h2>Fitbit 已连接</h2><p>可以关闭此窗口，Dashboard 会自动刷新。</p>"
+        "<script>window.opener?.focus();window.close();</script>"
+    )
 
 
 @app.get("/api/data")
@@ -2709,13 +2707,6 @@ def api_retrain():
     return {"status": "retraining"}
 
 
-@app.get("/api/sleep_diff/build")
-def api_sleep_diff_build(force: bool = False):
-    result = _build_sleep_diff_if_needed(force=force)
-    status = 200 if result.get("ok") else 500
-    return JSONResponse(result, status_code=status)
-
-
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -2731,46 +2722,14 @@ async def ws_endpoint(websocket: WebSocket):
 
 @app.get("/")
 def index():
-    if not TOKEN_FILE.exists():
-        return HTMLResponse(AUTH_PAGE)
-    html_file = STATIC_DIR / "index.html"
-    return HTMLResponse(html_file.read_text(encoding="utf-8"))
-
-
-@app.get("/sleep-diff")
-def sleep_diff_page(force: bool = False):
-    result = _build_sleep_diff_if_needed(force=force)
-    if not result.get("ok"):
-        err = result.get("error", "unknown_error")
-        return HTMLResponse(f"<h3>sleep diff 生成失败: {err}</h3>", status_code=500)
-    return HTMLResponse(SLEEP_DIFF_REPORT_FILE.read_text(encoding="utf-8"))
-
-
-AUTH_PAGE = """<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<title>Fitbit 仪表板 - 授权</title>
-<style>
-  body { margin:0; display:flex; align-items:center; justify-content:center; min-height:100vh;
-         background:#0f172a; font-family:-apple-system,sans-serif; color:#f1f5f9; }
-  .card { text-align:center; padding:48px; background:#1e293b; border-radius:16px; }
-  h2 { font-size:1.8rem; margin-bottom:8px; }
-  p  { color:#94a3b8; margin-bottom:32px; }
-  a  { display:inline-block; padding:12px 32px; background:#0ea5e9;
-       color:white; text-decoration:none; border-radius:8px; font-weight:600;
-       transition:background .2s; }
-  a:hover { background:#0284c7; }
-</style>
-</head>
-<body>
-<div class="card">
-  <h2>Fitbit 健康仪表板</h2>
-  <p>首次使用需要授权 Fitbit 账号</p>
-  <a href="/auth/start">授权 Fitbit</a>
-</div>
-</body>
-</html>"""
+    return JSONResponse(
+        {
+            "service": "fitbit-monitor",
+            "dashboard": "Akashic Dashboard / Fitbit 健康",
+            "auth_start": "/auth/start",
+        },
+        status_code=410,
+    )
 
 if __name__ == "__main__":
     print(f"服务器启动: http://{SERVER_HOST}:{SERVER_PORT}")
