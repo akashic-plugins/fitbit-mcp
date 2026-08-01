@@ -318,13 +318,25 @@ function renderFitbitDashboard(container) {
 
   let disposed = false;
   let timer;
-  const load = async () => {
-    try {
-      const payload = await api("/api/dashboard/fitbit/overview");
-      if (!disposed) renderOverview(container, payload);
-    } catch (error) {
-      if (!disposed) showError(container, error);
-    }
+  let inFlight = null;
+  let lastLoadedAt = 0;
+  const refreshIntervalMs = 60_000;
+  const load = () => {
+    if (inFlight) return inFlight;
+    inFlight = api("/api/dashboard/fitbit/overview")
+      .then((payload) => {
+        if (!disposed) {
+          renderOverview(container, payload);
+          lastLoadedAt = Date.now();
+        }
+      })
+      .catch((error) => {
+        if (!disposed) showError(container, error);
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    return inFlight;
   };
   const refresh = async () => {
     const button = container.querySelector("[data-fitbit-refresh]");
@@ -342,9 +354,11 @@ function renderFitbitDashboard(container) {
   };
   container.querySelector("[data-fitbit-refresh]").addEventListener("click", refresh);
   container.querySelector("[data-fitbit-retry]").addEventListener("click", load);
-  const onFocus = () => void load();
+  const onFocus = () => {
+    if (Date.now() - lastLoadedAt >= refreshIntervalMs) void load();
+  };
   window.addEventListener("focus", onFocus);
-  timer = window.setInterval(load, 60_000);
+  timer = window.setInterval(load, refreshIntervalMs);
   container.__fitbitDashboardDispose = () => {
     disposed = true;
     window.clearInterval(timer);
@@ -361,13 +375,8 @@ window.AkashicDashboard.registerPlugin({
   pageSize: 1,
   rowKey: "id",
   columns: [{ key: "id", label: "Fitbit", flex: true }],
-  async getCount() {
-    try {
-      await api("/api/dashboard/fitbit/overview");
-      return 1;
-    } catch {
-      return null;
-    }
+  getCount() {
+    return 1;
   },
   async fetchPage() {
     return { items: [], total: 0 };

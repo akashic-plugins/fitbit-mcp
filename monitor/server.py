@@ -945,6 +945,7 @@ async def lifespan(app: FastAPI):
     with _model_lock:
         _sleep_model = sleep_model.load_model()
     _init_health_history()
+    _publish_dashboard_snapshot(latest_data, list(_health_history))
 
     # 启动睡眠标注轮询线程（立即执行一次，之后每 6 小时）
     if REPORT_RETRAIN_ENABLED:
@@ -993,6 +994,11 @@ _last_fetch_day: str | None = None
 _crossday_hr_ref_tail: list[dict] = []
 _crossday_steps_ref_tail: list[dict] = []
 _health_history: deque[dict] = deque(maxlen=HEALTH_HISTORY_MAX)
+_dashboard_snapshot: dict = {
+    "data": {},
+    "sleep_24h": {},
+    "prediction_events": [],
+}
 _health_alert_last_notify: dict[str, float] = {}
 _sleep_recovery_cache: dict[str, object] = {"fetched_at": 0.0, "payload": None}
 _temperature_cache: dict[str, object] = {"fetched_at": 0.0, "payload": None}
@@ -1229,21 +1235,46 @@ def _std(values: list[float], mean_v: float | None = None) -> float:
     return var**0.5
 
 
+def _iter_jsonl_reverse(path: Path, block_size: int = 64 * 1024):
+    """Yield complete JSONL records from newest to oldest without loading the file."""
+
+    # 1. Read fixed-size byte blocks backwards and preserve the split line prefix.
+    with path.open("rb") as stream:
+        position = stream.seek(0, os.SEEK_END)
+        prefix = b""
+        while position > 0:
+            read_size = min(block_size, position)
+            position -= read_size
+            stream.seek(position)
+            chunk = stream.read(read_size) + prefix
+            lines = chunk.split(b"\n")
+            prefix = lines[0]
+
+            # 2. Decode only complete lines, newest first.
+            for line in reversed(lines[1:]):
+                if line.strip():
+                    yield line.decode("utf-8")
+
+        if prefix.strip():
+            yield prefix.decode("utf-8")
+
+
 def _tail_jsonl(path: Path, limit: int = HEALTH_HISTORY_MAX) -> list[dict]:
+    """Return the newest valid JSON objects in chronological order."""
+
     if not path.exists():
         return []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return []
     rows: list[dict] = []
-    for line in lines[-limit:]:
+    for line in _iter_jsonl_reverse(path):
         try:
             row = json.loads(line)
             if isinstance(row, dict):
                 rows.append(row)
-        except Exception:
+        except json.JSONDecodeError:
             continue
+        if len(rows) >= limit:
+            break
+    rows.reverse()
     return rows
 
 
@@ -2379,12 +2410,13 @@ def push(payload: dict):
 
 
 def polling_loop():
+    global _last_sleep_state
+
     while True:
         try:
             data = fetch_data()
             if data:
                 tokens = valid_tokens()
-                global _last_sleep_state
                 raw_state = data["sleep"]["state"]
                 raw_reason = data["sleep"]["reason"]
                 new_state, new_reason = resolve_sleep_state(
@@ -2425,6 +2457,8 @@ def polling_loop():
                     latest_data.update(data)
                     latest_data["last_updated"] = datetime.now().strftime("%H:%M:%S")
                     payload = dict(latest_data)
+
+                _publish_dashboard_snapshot(payload, list(_health_history))
 
                 # 每次轮询都记录（放到锁外，避免阻塞 /api/data）
                 log_state_change(new_state, data["sleep"]["reason"], data, changed)
@@ -2514,30 +2548,28 @@ def api_data():
         return JSONResponse(dict(latest_data))
 
 
-def _build_sleep_24h_payload(now: datetime | None = None) -> dict:
+def _build_sleep_24h_payload(
+    rows: list[dict], now: datetime | None = None
+) -> dict[str, str]:
+    """Collapse recent in-memory decisions into contiguous 24-hour state ranges."""
+
+    # 1. Select and order decisions within the requested window.
     now_dt = now or datetime.now()
     start_dt = now_dt - timedelta(hours=24)
     points: list[tuple[datetime, str]] = []
-
-    if LOG_FILE.exists():
-        for line in LOG_FILE.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            dt = _parse_poll_dt(str(obj.get("poll_time", "")))
-            if dt is None or dt < start_dt:
-                continue
-            state = str(obj.get("state") or "unknown").strip().lower() or "unknown"
-            points.append((dt, state))
+    for row in rows:
+        dt = _parse_poll_dt(str(row.get("poll_time", "")))
+        if dt is None or dt < start_dt:
+            continue
+        state = str(row.get("state") or "unknown").strip().lower() or "unknown"
+        points.append((dt, state))
 
     points.sort(key=lambda x: x[0])
     if not points:
         return {}
 
-    segments: list[dict] = []
+    # 2. Merge adjacent decisions with the same final state.
+    segments: list[dict[str, str]] = []
     for i, (seg_start_dt, state) in enumerate(points):
         seg_end_dt = points[i + 1][0] if i + 1 < len(points) else now_dt
         if seg_end_dt <= seg_start_dt:
@@ -2564,6 +2596,66 @@ def _build_sleep_24h_payload(now: datetime | None = None) -> dict:
     return state_map
 
 
+def _compact_prediction_events(rows: list[dict], limit: int = 320) -> list[dict]:
+    """Project only the model-decision fields rendered by the Dashboard."""
+
+    events: list[dict] = []
+    for row in reversed(rows[-limit:]):
+        signals = row.get("signals", {}) or {}
+        events.append(
+            {
+                "poll_time": row.get("poll_time"),
+                "state": row.get("state", "unknown"),
+                "reason": row.get("reason"),
+                "changed": bool(row.get("changed")),
+                "sleep_prob": row.get("sleep_prob", signals.get("sleep_prob")),
+                "signals": {
+                    "sleep_prob": signals.get("sleep_prob"),
+                    "prob_source": signals.get("prob_source"),
+                },
+            }
+        )
+    return events
+
+
+def _build_dashboard_snapshot(
+    data: dict, rows: list[dict], now: datetime | None = None
+) -> dict:
+    """Build the immutable compact payload consumed by the Dashboard boundary."""
+
+    # 1. Copy the bounded current-series data owned by this poll.
+    compact_data = {
+        "summary": copy.deepcopy(data.get("summary", {})),
+        "sleep": copy.deepcopy(data.get("sleep", {})),
+        "signals": copy.deepcopy(data.get("signals", {})),
+        "data_meta": copy.deepcopy(data.get("data_meta", {})),
+        "heart_rate": copy.deepcopy(data.get("heart_rate", [])[-60:]),
+        "steps": copy.deepcopy(data.get("steps", [])[-60:]),
+        "last_updated": data.get("last_updated"),
+        "stale": bool(data.get("stale", False)),
+    }
+
+    # 2. Publish bounded history projections; raw JSONL remains archival evidence.
+    raw_sleep_24h = _build_sleep_24h_payload(rows, now=now)
+    return {
+        "data": compact_data,
+        "sleep_24h": {
+            time_range: _collapse_external_sleep_state(state)
+            for time_range, state in raw_sleep_24h.items()
+        },
+        "prediction_events": _compact_prediction_events(rows),
+    }
+
+
+def _publish_dashboard_snapshot(data: dict, rows: list[dict]) -> None:
+    """Atomically replace the monitor-owned Dashboard snapshot."""
+
+    global _dashboard_snapshot
+    snapshot = _build_dashboard_snapshot(data, rows)
+    with data_lock:
+        _dashboard_snapshot = snapshot
+
+
 def _collapse_external_sleep_state(state: str | None) -> str:
     s = str(state or "unknown").strip().lower() or "unknown"
     if s == "uncertain":
@@ -2584,9 +2676,19 @@ def _build_external_sleep_payload(
     }
 
 
-def _build_external_sleep_24h_payload(now: datetime | None = None) -> dict:
-    raw = _build_sleep_24h_payload(now=now)
+def _build_external_sleep_24h_payload() -> dict:
+    with data_lock:
+        raw = dict(_dashboard_snapshot["sleep_24h"])
     return {k: _collapse_external_sleep_state(v) for k, v in raw.items()}
+
+
+@app.get("/api/dashboard/snapshot")
+def api_dashboard_snapshot():
+    """Return the poll-owned compact Dashboard snapshot without disk access."""
+
+    with data_lock:
+        snapshot = _dashboard_snapshot
+    return JSONResponse(snapshot)
 
 
 @app.get("/api/agent")
@@ -2654,17 +2756,11 @@ def api_sleep_log(
     allowed_states = {"sleeping", "awake", "uncertain", "unknown"}
     if state_filter and state_filter not in allowed_states:
         state_filter = ""
-    try:
-        lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return JSONResponse([])
     entries: list[dict] = []
-    for line in reversed(lines):  # 最新在前
-        if not line.strip():
-            continue
+    for line in _iter_jsonl_reverse(LOG_FILE):
         try:
             row = json.loads(line)
-        except Exception:
+        except json.JSONDecodeError:
             continue
         if not isinstance(row, dict):
             continue

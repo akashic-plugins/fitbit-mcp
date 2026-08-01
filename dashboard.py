@@ -18,13 +18,11 @@ def register(app: FastAPI, plugin_dir: object, workspace: object) -> None:
 
     @app.get("/api/dashboard/fitbit/overview")
     def overview() -> dict[str, object]:
-        # 1. Read the monitor-owned current state at the local HTTP boundary.
-        data = _monitor_json("/api/data")
-        snapshot = _monitor_json("/api/tool/fitbit_health_snapshot")
-        history = _monitor_list("/api/sleep_log?limit=320")
+        # 1. Read the poll-owned compact state once at the local HTTP boundary.
+        snapshot = _monitor_json("/api/dashboard/snapshot")
 
         # 2. Project only the fields rendered by the Dashboard first screen.
-        return _project_overview(data, snapshot, history)
+        return _project_dashboard_snapshot(snapshot)
 
     @app.post("/api/dashboard/fitbit/refresh", status_code=202)
     def refresh() -> dict[str, str]:
@@ -43,13 +41,6 @@ def _monitor_json(path: str) -> Mapping[str, object]:
     return payload
 
 
-def _monitor_list(path: str) -> list[object]:
-    payload = _monitor_payload(path)
-    if not isinstance(payload, list):
-        raise HTTPException(status_code=502, detail=f"Fitbit monitor 返回非数组: {path}")
-    return payload
-
-
 def _monitor_payload(path: str) -> object:
     try:
         response = requests.get(f"{_MONITOR_URL}{path}", timeout=8)
@@ -61,6 +52,20 @@ def _monitor_payload(path: str) -> object:
     except requests.exceptions.JSONDecodeError as error:
         raise HTTPException(status_code=502, detail=f"Fitbit monitor 返回无效 JSON: {path}") from error
     return payload
+
+
+def _project_dashboard_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
+    """Validate and project the monitor-owned compact snapshot."""
+
+    data = _mapping(payload, "data")
+    sleep_24h = _mapping(payload, "sleep_24h")
+    prediction_events = payload.get("prediction_events")
+    if not isinstance(prediction_events, list):
+        raise HTTPException(
+            status_code=502,
+            detail="Fitbit monitor prediction_events 必须是数组",
+        )
+    return _project_overview(data, {"sleep_24h": sleep_24h}, prediction_events)
 
 
 def _project_overview(

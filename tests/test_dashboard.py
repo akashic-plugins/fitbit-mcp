@@ -49,6 +49,12 @@ HISTORY = [
     }
 ]
 
+MONITOR_SNAPSHOT = {
+    "data": DATA,
+    "sleep_24h": SNAPSHOT["sleep_24h"],
+    "prediction_events": HISTORY,
+}
+
 
 def test_projects_only_dashboard_first_screen_fields() -> None:
     overview = dashboard._project_overview(DATA, SNAPSHOT, HISTORY)
@@ -78,6 +84,33 @@ def test_projects_only_dashboard_first_screen_fields() -> None:
     ]
     assert "sleep_report" not in overview
     assert "health_context" not in overview
+
+
+def test_registered_overview_reads_one_compact_monitor_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = dashboard.FastAPI()
+    calls: list[str] = []
+
+    def monitor_json(path: str):
+        calls.append(path)
+        return MONITOR_SNAPSHOT
+
+    monkeypatch.setattr(dashboard, "_monitor_json", monitor_json)
+    dashboard.register(app, object(), object())
+    overview_route = next(
+        route for route in app.routes if route.path == "/api/dashboard/fitbit/overview"
+    )
+
+    assert overview_route.endpoint()["current"]["heart_rate"] == 72
+    assert calls == ["/api/dashboard/snapshot"]
+
+
+def test_compact_snapshot_boundary_rejects_missing_prediction_events() -> None:
+    with pytest.raises(HTTPException, match="prediction_events 必须是数组"):
+        dashboard._project_dashboard_snapshot(
+            {"data": DATA, "sleep_24h": SNAPSHOT["sleep_24h"]}
+        )
 
 
 def test_dashboard_projection_rejects_malformed_monitor_payload() -> None:

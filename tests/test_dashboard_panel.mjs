@@ -68,6 +68,7 @@ test("Dashboard panel renders the current monitor snapshot without a table", asy
   await import(`../dashboard_panel.js?test=${Date.now()}`);
   assert.equal(registered.length, 1);
   assert.equal(registered[0].layout, "workbench");
+  assert.equal(registered[0].getCount(), 1);
 
   const host = window.document.querySelector("#host");
   registered[0].renderMain(host, {});
@@ -91,5 +92,37 @@ test("Dashboard panel renders the current monitor snapshot without a table", asy
   assert.match(host.querySelector(".fitbit-dashboard__subtitle").textContent, /^18765 实时数据/);
   assert.match(host.querySelector("[data-fitbit-heart-path]").getAttribute("d"), /^M/);
 
+  host.__fitbitDashboardDispose();
+});
+
+
+test("Dashboard panel coalesces overlapping initial and focus loads", async () => {
+  const { window } = parseHTML("<html><body><div id='host'></div></body></html>");
+  const registered = [];
+  let requests = 0;
+  let resolveRequest;
+  window.api = () => {
+    requests += 1;
+    return new Promise((resolve) => {
+      resolveRequest = resolve;
+    });
+  };
+  window.setInterval = setInterval;
+  window.clearInterval = clearInterval;
+  window.setTimeout = setTimeout;
+  window.AkashicDashboard = { registerPlugin: (plugin) => registered.push(plugin) };
+  globalThis.window = window;
+  globalThis.document = window.document;
+
+  await import(`../dashboard_panel.js?coalesce=${Date.now()}`);
+  const host = window.document.querySelector("#host");
+  registered[0].renderMain(host, {});
+  window.dispatchEvent(new window.Event("focus"));
+  window.dispatchEvent(new window.Event("focus"));
+
+  assert.equal(requests, 1);
+  resolveRequest(overview);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(host.querySelector("[data-fitbit-state]").textContent, "清醒");
   host.__fitbitDashboardDispose();
 });
