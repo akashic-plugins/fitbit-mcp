@@ -42,7 +42,17 @@ data = {
     "steps": [{"time": "12:05:00", "value": 0}],
     "last_updated": "12:05:00",
 }
-snapshot = server._build_dashboard_snapshot(data, rows, now=datetime(2026, 8, 1, 12, 6))
+history_rows = [
+    {
+        **rows[0],
+        "poll_time": "2026-07-31 12:05:00",
+        "reason": "outside-window",
+    },
+    *rows,
+]
+snapshot = server._build_dashboard_snapshot(
+    data, history_rows, now=datetime(2026, 8, 1, 12, 6)
+)
 assert [event["poll_time"] for event in snapshot["prediction_events"]] == [
     row["poll_time"] for row in reversed(rows)
 ]

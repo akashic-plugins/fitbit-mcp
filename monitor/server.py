@@ -2596,11 +2596,20 @@ def _build_sleep_24h_payload(
     return state_map
 
 
-def _compact_prediction_events(rows: list[dict], limit: int = 320) -> list[dict]:
-    """Project only the model-decision fields rendered by the Dashboard."""
+def _compact_prediction_events(
+    rows: list[dict], now: datetime | None = None, limit: int = 320
+) -> list[dict]:
+    """Project at most 24 hours of model-decision fields for the Dashboard."""
 
+    cutoff = (now or datetime.now()) - timedelta(hours=24)
+    recent_rows = [
+        row
+        for row in rows
+        if (poll_dt := _parse_poll_dt(str(row.get("poll_time", "")))) is not None
+        and poll_dt >= cutoff
+    ]
     events: list[dict] = []
-    for row in reversed(rows[-limit:]):
+    for row in reversed(recent_rows[-limit:]):
         signals = row.get("signals", {}) or {}
         events.append(
             {
@@ -2643,7 +2652,7 @@ def _build_dashboard_snapshot(
             time_range: _collapse_external_sleep_state(state)
             for time_range, state in raw_sleep_24h.items()
         },
-        "prediction_events": _compact_prediction_events(rows),
+        "prediction_events": _compact_prediction_events(rows, now=now),
     }
 
 
