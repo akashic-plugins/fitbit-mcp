@@ -10,14 +10,14 @@
   --fitbit-steps-container: oklch(0.27 0.025 165);
   --fitbit-steps-ink: oklch(0.88 0.04 165);
   --fitbit-awake-ink: oklch(0.78 0.02 250);
-  --fitbit-surface: var(--color-bg);
-  --fitbit-surface-low: var(--color-surface);
-  --fitbit-surface-container: var(--color-surface-2);
-  --fitbit-surface-high: var(--color-surface-3);
-  --fitbit-on-surface: var(--color-fg);
-  --fitbit-on-surface-variant: var(--color-muted);
-  --fitbit-outline-variant: var(--color-border);
-  --fitbit-error: var(--color-danger);
+  --fitbit-surface: var(--ak-color-bg-canvas);
+  --fitbit-surface-low: var(--ak-color-bg-surface-low);
+  --fitbit-surface-container: var(--ak-color-bg-surface);
+  --fitbit-surface-high: var(--ak-color-bg-surface-high);
+  --fitbit-on-surface: var(--ak-color-text-primary);
+  --fitbit-on-surface-variant: var(--ak-color-text-muted);
+  --fitbit-outline-variant: var(--ak-color-border-default);
+  --fitbit-error: var(--ak-color-status-error);
   width: min(1120px, 100%);
   margin-inline: auto;
   padding: clamp(20px, 3vw, 40px);
@@ -100,11 +100,11 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--color-success);
+  background: var(--ak-color-status-success);
 }
 
 .fitbit-dashboard__sync.is-stale > i {
-  background: var(--color-warning);
+  background: var(--ak-color-status-warning);
 }
 
 .fitbit-dashboard__button {
