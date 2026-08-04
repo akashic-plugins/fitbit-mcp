@@ -193,7 +193,7 @@
   background: var(--fitbit-surface-low);
 }
 
-.fitbit-dashboard__state-ring {
+.fitbit-dashboard__state-reading {
   display: grid;
   width: min(420px, 100%);
   place-content: center;
@@ -203,14 +203,14 @@
   text-align: center;
 }
 
-.fitbit-dashboard__state-ring > span,
-.fitbit-dashboard__state-ring > small {
+.fitbit-dashboard__state-reading > span,
+.fitbit-dashboard__state-reading > small {
   font-size: 0.8125rem;
   font-weight: 600;
   line-height: 1.4;
 }
 
-.fitbit-dashboard__state-ring > strong {
+.fitbit-dashboard__state-reading > strong {
   margin-block: 8px;
   font-size: clamp(2.5rem, 5vw, 4rem);
   font-weight: 560;
@@ -326,7 +326,7 @@
 
 .fitbit-dashboard__trend > header,
 .fitbit-dashboard__rhythm > header,
-.fitbit-dashboard__predictions > header {
+.fitbit-dashboard__predictions > summary {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -335,14 +335,14 @@
 
 .fitbit-dashboard__trend header > div,
 .fitbit-dashboard__rhythm header > div,
-.fitbit-dashboard__predictions header > div {
+.fitbit-dashboard__predictions summary > div {
   display: grid;
   gap: 6px;
 }
 
 .fitbit-dashboard__trend header span,
 .fitbit-dashboard__rhythm header span,
-.fitbit-dashboard__predictions header span {
+.fitbit-dashboard__predictions summary span {
   font-size: 1rem;
   font-weight: 650;
 }
@@ -351,8 +351,8 @@
 .fitbit-dashboard__rhythm header strong,
 .fitbit-dashboard__trend header small,
 .fitbit-dashboard__rhythm header small,
-.fitbit-dashboard__predictions header strong,
-.fitbit-dashboard__predictions header small {
+.fitbit-dashboard__predictions summary strong,
+.fitbit-dashboard__predictions summary small {
   color: var(--fitbit-on-surface-variant);
   font-size: 0.75rem;
   font-weight: 500;
@@ -439,6 +439,29 @@
 
 .fitbit-dashboard__predictions {
   margin-top: 16px;
+}
+
+.fitbit-dashboard__predictions > summary {
+  padding: 2px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.fitbit-dashboard__predictions > summary::-webkit-details-marker { display: none; }
+
+.fitbit-dashboard__predictions > summary::after {
+  margin-inline-start: 12px;
+  color: var(--fitbit-on-surface-variant);
+  content: "展开";
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.fitbit-dashboard__predictions[open] > summary::after { content: "收起"; }
+
+.fitbit-dashboard__predictions > summary:focus-visible {
+  outline: 2px solid var(--fitbit-primary);
+  outline-offset: 4px;
 }
 
 .fitbit-dashboard__decision-flow {

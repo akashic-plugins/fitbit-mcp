@@ -89,7 +89,7 @@ test("Dashboard panel renders the current monitor snapshot without a table", asy
   assert.equal(host.querySelector("[data-fitbit-prediction-end]").textContent, "现在 · 13:27");
   assert.equal(host.querySelector("[data-fitbit-prediction-window]").textContent, "最近 24 小时 · 3 次判断");
   assert.equal(host.querySelector(".fitbit-dashboard__eyebrow"), null);
-  assert.match(host.querySelector(".fitbit-dashboard__subtitle").textContent, /^18765 实时数据/);
+  assert.match(host.querySelector(".fitbit-dashboard__subtitle").textContent, /^展示 Fitbit 观测/);
   assert.match(host.querySelector("[data-fitbit-heart-path]").getAttribute("d"), /^M/);
 
   host.__fitbitDashboardDispose();

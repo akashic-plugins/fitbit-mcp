@@ -221,7 +221,7 @@ function renderFitbitDashboard(container) {
       <header class="fitbit-dashboard__header">
         <div>
           <h1 id="fitbit-dashboard-title">Fitbit 健康</h1>
-          <p class="fitbit-dashboard__subtitle">18765 实时数据与模型判断记录，不生成健康结论。</p>
+          <p class="fitbit-dashboard__subtitle">展示 Fitbit 观测与睡眠判断，不提供医疗建议。</p>
         </div>
         <div class="fitbit-dashboard__actions">
           <span class="fitbit-dashboard__sync" data-fitbit-status><i></i><span data-fitbit-updated>正在连接</span></span>
@@ -236,8 +236,8 @@ function renderFitbitDashboard(container) {
       <div data-fitbit-content hidden>
         <section class="fitbit-dashboard__hero" aria-label="当前健康概览">
           <article class="fitbit-dashboard__state-surface is-unknown" data-fitbit-state-surface>
-            <div class="fitbit-dashboard__state-ring">
-              <span>当前状态</span>
+            <div class="fitbit-dashboard__state-reading">
+              <span>当前判断</span>
               <strong data-fitbit-state>等待数据</strong>
               <small data-fitbit-probability>概率尚不可用</small>
             </div>
@@ -277,14 +277,14 @@ function renderFitbitDashboard(container) {
           </article>
         </section>
 
-        <section class="fitbit-dashboard__predictions" aria-labelledby="fitbit-prediction-title">
-          <header>
+        <details class="fitbit-dashboard__predictions">
+          <summary>
             <div>
               <span id="fitbit-prediction-title">ML 判断记录</span>
               <strong>模型概率和最终状态是两层结果</strong>
             </div>
             <small data-fitbit-prediction-window>最近 24 小时</small>
-          </header>
+          </summary>
           <div class="fitbit-dashboard__decision-flow" aria-label="睡眠判断流程">
             <span><small>第一层</small><strong>ML 睡眠概率</strong></span>
             <b aria-hidden="true">→</b>
@@ -312,7 +312,7 @@ function renderFitbitDashboard(container) {
           </div>
           <p class="fitbit-dashboard__prediction-empty" data-fitbit-prediction-empty hidden>尚无模型判断记录。</p>
           <ol class="fitbit-dashboard__prediction-events" data-fitbit-prediction-events></ol>
-        </section>
+        </details>
       </div>
     </main>`;
 
@@ -370,7 +370,7 @@ function renderFitbitDashboard(container) {
 window.AkashicDashboard.registerPlugin({
   id: "fitbit_health",
   label: "Fitbit 健康",
-  viewLabel: "Fitbit 实时健康",
+  viewLabel: "Fitbit 健康",
   layout: "workbench",
   pageSize: 1,
   rowKey: "id",
