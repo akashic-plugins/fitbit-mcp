@@ -61,7 +61,7 @@
 }
 
 .fitbit-dashboard__header h1 {
-  font-size: clamp(2rem, 4vw, 3.25rem);
+  font-size: clamp(1.75rem, 3vw, 2.4rem);
   font-weight: 650;
   letter-spacing: -0.045em;
   line-height: 1.05;
@@ -114,7 +114,7 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 0 18px;
   color: var(--fitbit-on-primary);
   background: var(--fitbit-primary);
@@ -154,7 +154,8 @@
   align-items: center;
   justify-content: center;
   gap: 18px;
-  border-radius: 28px;
+  border: 1px solid var(--fitbit-outline-variant);
+  border-radius: 8px;
   color: var(--fitbit-on-surface-variant);
   background: var(--fitbit-surface-low);
   font-size: 0.875rem;
@@ -168,7 +169,7 @@
 .fitbit-dashboard__error button {
   min-height: 44px;
   border: 1px solid var(--fitbit-outline-variant);
-  border-radius: 999px;
+  border-radius: 8px;
   padding-inline: 18px;
   color: var(--fitbit-on-surface);
   background: var(--fitbit-surface-container);
@@ -182,25 +183,23 @@
 
 .fitbit-dashboard__state-surface {
   display: grid;
-  min-height: 430px;
+  min-height: 320px;
   place-items: center;
   align-content: center;
-  border-radius: 28px;
+  border: 1px solid var(--fitbit-outline-variant);
+  border-radius: 8px;
   padding: 32px;
-  color: var(--fitbit-on-primary-container);
-  background: var(--fitbit-primary-container);
+  color: var(--fitbit-on-surface);
+  background: var(--fitbit-surface-low);
 }
 
 .fitbit-dashboard__state-ring {
   display: grid;
-  width: min(300px, 78vw);
-  aspect-ratio: 1;
+  width: min(420px, 100%);
   place-content: center;
   justify-items: center;
-  border: 30px solid color-mix(in oklch, var(--fitbit-primary) 72%, transparent);
-  border-radius: 50%;
-  background: color-mix(in oklch, var(--fitbit-primary-container) 88%, var(--fitbit-surface-low));
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--fitbit-on-primary-container) 12%, transparent);
+  border: 0;
+  background: transparent;
   text-align: center;
 }
 
@@ -230,8 +229,11 @@
 
 .fitbit-dashboard__metrics {
   display: grid;
-  gap: 8px;
+  gap: 0;
   margin: 0;
+  border: 1px solid var(--fitbit-outline-variant);
+  border-radius: 8px;
+  background: var(--fitbit-surface-low);
 }
 
 .fitbit-dashboard__metric {
@@ -240,23 +242,27 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 20px;
-  border-radius: 20px;
-  padding: 24px 26px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--fitbit-outline-variant);
+  color: var(--fitbit-on-surface);
+  background: transparent;
 }
 
+.fitbit-dashboard__metric:last-child { border-bottom: 0; }
+
 .fitbit-dashboard__metric.is-heart {
-  color: var(--fitbit-heart-ink);
-  background: var(--fitbit-heart-container);
+  color: var(--fitbit-on-surface);
+  background: transparent;
 }
 
 .fitbit-dashboard__metric.is-oxygen {
-  color: var(--fitbit-oxygen-ink);
-  background: var(--fitbit-oxygen-container);
+  color: var(--fitbit-on-surface);
+  background: transparent;
 }
 
 .fitbit-dashboard__metric.is-steps {
-  color: var(--fitbit-steps-ink);
-  background: var(--fitbit-steps-container);
+  color: var(--fitbit-on-surface);
+  background: transparent;
 }
 
 .fitbit-dashboard__metric dt,
@@ -311,10 +317,11 @@
 .fitbit-dashboard__rhythm,
 .fitbit-dashboard__predictions {
   min-width: 0;
-  border-radius: 28px;
+  border: 1px solid var(--fitbit-outline-variant);
+  border-radius: 8px;
   padding: 24px 26px;
   background: var(--fitbit-surface-low);
-  box-shadow: 0 0 0 1px var(--fitbit-outline-variant);
+  box-shadow: none;
 }
 
 .fitbit-dashboard__trend > header,
@@ -386,7 +393,7 @@
   height: 42px;
   margin-top: 42px;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: 3px;
   background: var(--fitbit-surface-container);
 }
 
@@ -613,7 +620,7 @@
   }
 
   .fitbit-dashboard__state-surface {
-    min-height: 390px;
+    min-height: 300px;
   }
 }
 
@@ -640,12 +647,8 @@
   .fitbit-dashboard__trend,
   .fitbit-dashboard__rhythm,
   .fitbit-dashboard__predictions {
-    border-radius: 24px;
+    border-radius: 8px;
     padding: 20px;
-  }
-
-  .fitbit-dashboard__state-ring {
-    border-width: 24px;
   }
 
   .fitbit-dashboard__metric {
