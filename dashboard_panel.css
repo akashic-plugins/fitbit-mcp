@@ -28,7 +28,8 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-:root[data-theme="light"] .fitbit-dashboard {
+:root[data-theme="light"] .fitbit-dashboard,
+:root[data-theme="warm-paper"] .fitbit-dashboard {
   --fitbit-primary: oklch(0.53 0.135 270);
   --fitbit-on-primary: oklch(0.98 0.006 270);
   --fitbit-primary-container: oklch(0.92 0.035 270);
