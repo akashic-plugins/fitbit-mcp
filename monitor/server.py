@@ -1227,6 +1227,43 @@ def _median(values: list[float]) -> float | None:
     return (s[m - 1] + s[m]) / 2
 
 
+def _clean_spo2(vals: list[float], diff: float = 4.0, win: int = 9) -> list[float]:
+    """血氧清洗流水线（pobm/OxiTidy 风格）：
+    set_range(50-100) → delta filter(相邻跳变>diff 剔除) → median filter(win 点平滑)。
+    真性血氧变化是渐进的，瞬间跳变多为压手/翻身伪影。
+    """
+    clean = [v for v in vals if 50 <= v <= 100]
+    if not clean:
+        return []
+    out = [clean[0]]
+    for i in range(1, len(clean)):
+        if abs(clean[i] - clean[i - 1]) <= diff:
+            out.append(clean[i])
+    if len(out) >= win:
+        half = win // 2
+        smoothed = []
+        for i in range(len(out)):
+            w = out[max(0, i - half): min(len(out), i + half + 1)]
+            smoothed.append(_median(w) or out[i])
+        out = smoothed
+    return out
+
+
+def _spo2_daily_estimate(vals: list[float]) -> tuple:
+    """每日血氧口径：清洗后上四分位 Q3（对齐 Fitbit 官方 App 数值），附风险指标。
+    返回 (q3, median, t90, nadir, n_clean)；无有效数据时各值为 None/0。
+    """
+    clean = _clean_spo2(vals)
+    if not clean:
+        return None, None, None, None, 0
+    s = sorted(clean)
+    q3 = s[min(len(s) - 1, int(len(s) * 0.75))]
+    med = _median(clean)
+    t90 = round(sum(1 for v in clean if v < 90) / len(clean) * 100, 1)
+    nadir = min(clean)
+    return q3, med, t90, nadir, len(clean)
+
+
 def _std(values: list[float], mean_v: float | None = None) -> float:
     if not values or len(values) < 2:
         return 0.0
@@ -2336,9 +2373,21 @@ def fetch_data() -> dict | None:
     hr_val = result["heart_rate"][-1]["value"] if result["heart_rate"] else None
     hr_time = result["heart_rate"][-1]["time"] if result["heart_rate"] else None
     steps_sum = int(sum(s["value"] for s in result["steps"]))
-    spo2_val = result["spo2"][-1]["value"] if result["spo2"] else None
+    # 血氧：清洗后 Q3 作为每日口径（对齐官方 App），另附中位/T90/nadir 风险指标
+    spo2_q3, spo2_med, spo2_t90, spo2_nadir, spo2_n = _spo2_daily_estimate(
+        [m["value"] for m in result["spo2"]]
+    )
+    spo2_val = spo2_q3
     spo2_time = result["spo2"][-1]["time"] if result["spo2"] else None
-    result["summary"] = {"heart_rate": hr_val, "steps": steps_sum, "spo2": spo2_val}
+    result["summary"] = {
+        "heart_rate": hr_val,
+        "steps": steps_sum,
+        "spo2": spo2_val,
+        "spo2_median": spo2_med,
+        "spo2_t90": spo2_t90,
+        "spo2_nadir": spo2_nadir,
+        "spo2_samples": spo2_n,
+    }
 
     # 数据延迟计算
     data_lag_min = None
@@ -2737,6 +2786,10 @@ def api_tool_fitbit_health_snapshot():
             "heart_rate": summary.get("heart_rate"),
             "spo2": summary.get("spo2"),
             "latest_sleep_spo2": summary.get("spo2"),
+            "spo2_median": summary.get("spo2_median"),
+            "spo2_t90": summary.get("spo2_t90"),
+            "spo2_nadir": summary.get("spo2_nadir"),
+            "spo2_samples": summary.get("spo2_samples"),
             "latest_sleep_spo2_time": meta.get("latest_sleep_spo2_time"),
             "steps": summary.get("steps"),
             "sleep_state": _collapse_external_sleep_state(sleep.get("state", "unknown")),
