@@ -10,12 +10,20 @@ def test_declares_mcp_and_both_proactive_channels() -> None:
     plugin = FitbitPlugin()
     plugin.context = type("Context", (), {"config": FitbitConfig()})()
 
-    assert plugin.version == "1.4.1"
-    assert [server.name for server in plugin.mcp_servers()] == ["fitbit"]
+    assert plugin.version == "1.4.2"
+    servers = plugin.mcp_servers()
+    assert [server.name for server in servers] == ["fitbit"]
+    assert servers[0].candidate_read_only_tools == (
+        "get_proactive_events",
+        "get_sleep_context",
+        "fitbit_health_snapshot",
+        "fitbit_sleep_report",
+    )
     services = plugin.managed_services()
     assert [(service.id, service.cwd) for service in services] == [
         ("monitor", "monitor")
     ]
+    assert services[0].validation_port_env == "FITBIT_MONITOR_PORT"
     sources = plugin.proactive_sources()
     assert [source.id for source in sources] == ["health_alerts", "sleep_context"]
     assert [source.channels for source in sources] == [("alert",), ("context",)]

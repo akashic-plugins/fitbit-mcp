@@ -199,7 +199,7 @@ class FitbitConfig(BaseModel):
 class FitbitPlugin(Plugin):
     api_version = 2
     name = "fitbit"
-    version = "1.4.1"
+    version = "1.4.2"
     desc = "Fitbit health monitor and sleep model"
     ConfigModel = FitbitConfig
 
@@ -220,7 +220,18 @@ class FitbitPlugin(Plugin):
 
     @classmethod
     def mcp_servers(cls) -> list[McpServerSpec]:
-        return [McpServerSpec(name="fitbit", command=("python", "run_mcp.py"))]
+        return [
+            McpServerSpec(
+                name="fitbit",
+                command=("python", "run_mcp.py"),
+                candidate_read_only_tools=(
+                    "get_proactive_events",
+                    "get_sleep_context",
+                    "fitbit_health_snapshot",
+                    "fitbit_sleep_report",
+                ),
+            )
+        ]
 
     @classmethod
     def managed_services(cls) -> list[ManagedServiceSpec]:
@@ -231,6 +242,7 @@ class FitbitPlugin(Plugin):
                 cwd="monitor",
                 readiness_url="http://127.0.0.1:18765/api/data",
                 startup_timeout_seconds=15,
+                validation_port_env="FITBIT_MONITOR_PORT",
             )
         ]
 
