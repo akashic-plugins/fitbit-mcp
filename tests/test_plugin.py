@@ -10,6 +10,7 @@ def test_declares_mcp_and_both_proactive_channels() -> None:
     plugin = FitbitPlugin()
     plugin.context = type("Context", (), {"config": FitbitConfig()})()
 
+    assert plugin.version == "1.4.1"
     assert [server.name for server in plugin.mcp_servers()] == ["fitbit"]
     services = plugin.managed_services()
     assert [(service.id, service.cwd) for service in services] == [
