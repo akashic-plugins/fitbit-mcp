@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import cast
+
 import pytest
+from agent.plugin_composition import DashboardContext
+from fastapi.routing import APIRoute
 from fastapi import HTTPException
 
 import dashboard
@@ -97,9 +102,23 @@ def test_registered_overview_reads_one_compact_monitor_snapshot(
         return MONITOR_SNAPSHOT
 
     monkeypatch.setattr(dashboard, "_monitor_json", monitor_json)
-    dashboard.register(app, object(), object())
-    overview_route = next(
-        route for route in app.routes if route.path == "/api/dashboard/fitbit/overview"
+    dashboard.register(
+        app,
+        DashboardContext(
+            plugin_id="fitbit",
+            plugin_dir=Path(dashboard.__file__).resolve().parent,
+            data_root=Path("/tmp/fitbit-dashboard-test"),
+            validation=False,
+        ),
+    )
+    overview_route = cast(
+        APIRoute,
+        next(
+            route
+            for route in app.routes
+            if isinstance(route, APIRoute)
+            and route.path == "/api/dashboard/fitbit/overview"
+        ),
     )
 
     assert overview_route.endpoint()["current"]["heart_rate"] == 72

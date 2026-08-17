@@ -20,6 +20,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -32,6 +33,10 @@ BASE_URL = f"http://{HOST}:{PORT}"
 _last_wake_presence = "unknown"
 
 
+def _recording_backend() -> bool:
+    return os.environ.get("FITBIT_BACKEND", "").strip().lower() == "recording"
+
+
 def _monitor_available(timeout: float = 1.0) -> bool:
     try:
         resp = requests.get(f"{BASE_URL}/api/data", timeout=timeout)
@@ -41,7 +46,7 @@ def _monitor_available(timeout: float = 1.0) -> bool:
         return False
 
 
-def _to_standard_event(raw: dict) -> dict:
+def _to_standard_event(raw: dict[str, Any]) -> dict[str, Any]:
     """把 fitbit-monitor 的原始事件 dict 转换为标准 ProactiveEvent schema。"""
     created_at = raw.get("created_at")
     published_at = None
@@ -65,14 +70,14 @@ def _to_standard_event(raw: dict) -> dict:
     }
 
 
-def _fetch_agent_payload(timeout: int = 5) -> dict:
+def _fetch_agent_payload(timeout: int = 5) -> dict[str, Any]:
     resp = requests.get(f"{BASE_URL}/api/agent", timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
     return data if isinstance(data, dict) else {}
 
 
-def _build_sleep_context(data: dict) -> dict:
+def _build_sleep_context(data: dict[str, Any]) -> dict[str, Any]:
     sleep = data.get("sleep", {}) or {}
     state = str(sleep.get("state", "unknown") or "unknown")
     prob = sleep.get("prob")
@@ -117,12 +122,12 @@ def _build_sleep_context(data: dict) -> dict:
 
 
 def _with_wake_contract(
-    payload: dict,
+    payload: dict[str, Any],
     *,
     state: str,
     probability: object,
     observed_at: datetime | None = None,
-) -> dict:
+) -> dict[str, Any]:
     global _last_wake_presence
     presence = {
         "sleeping": "sleeping",
@@ -167,7 +172,7 @@ def _bounded_probability(value: object) -> float:
         return 0.5
 
 
-def _unavailable_sleep_context(hint: str) -> dict:
+def _unavailable_sleep_context(hint: str) -> dict[str, Any]:
     payload = {
         "available": False,
         "topic": "",
@@ -193,36 +198,64 @@ def create_mcp_server() -> FastMCP:
         返回标准 ProactiveEvent alert schema 的 JSON 数组。
         空数组表示当前无待处理告警。
         """
+        if _recording_backend():
+            return json.dumps({"status": "empty"}, ensure_ascii=False)
         try:
             data = _fetch_agent_payload(timeout=5)
             raw_events = data.get("health_events") or []
             events = [_to_standard_event(e) for e in raw_events]
-            return json.dumps(events, ensure_ascii=False)
-        except requests.exceptions.ConnectionError:
+            payload = (
+                {"status": "items", "items": events}
+                if events
+                else {"status": "empty"}
+            )
+            return json.dumps(payload, ensure_ascii=False)
+        except requests.exceptions.ConnectionError as error:
             logger.warning("fitbit-monitor 未运行 (%s)", BASE_URL)
-            return json.dumps([])
+            return json.dumps(
+                {"status": "failure", "error": str(error), "retryable": True},
+                ensure_ascii=False,
+            )
         except Exception as e:
             logger.error("get_events 失败: %s", e)
-            return json.dumps({"error": str(e)})
+            return json.dumps(
+                {"status": "failure", "error": str(e), "retryable": True},
+                ensure_ascii=False,
+            )
 
     @mcp.tool()
     def get_sleep_context() -> str:
         """获取 Fitbit 睡眠判断上下文，供 proactive 作为 context 注入。"""
+        if _recording_backend():
+            return json.dumps({"status": "empty"}, ensure_ascii=False)
         try:
             data = _fetch_agent_payload(timeout=5)
-            return json.dumps(_build_sleep_context(data), ensure_ascii=False)
+            return json.dumps(
+                {"status": "items", "items": [_build_sleep_context(data)]},
+                ensure_ascii=False,
+            )
         except requests.exceptions.ConnectionError:
             logger.warning("fitbit-monitor 未运行 (%s)", BASE_URL)
             return json.dumps(
-                _unavailable_sleep_context(
-                    "Fitbit 睡眠判断当前不可用；即使可用，它也只是概率判断，不保证 100% 准确。"
-                ),
+                {
+                    "status": "items",
+                    "items": [
+                        _unavailable_sleep_context(
+                            "Fitbit 睡眠判断当前不可用；即使可用，它也只是概率判断，不保证 100% 准确。"
+                        )
+                    ],
+                },
                 ensure_ascii=False,
             )
         except Exception as e:
             logger.error("get_sleep_context 失败: %s", e)
             return json.dumps(
-                _unavailable_sleep_context(f"Fitbit 睡眠判断拉取失败: {e}"),
+                {
+                    "status": "items",
+                    "items": [
+                        _unavailable_sleep_context(f"Fitbit 睡眠判断拉取失败: {e}")
+                    ],
+                },
                 ensure_ascii=False,
             )
 
@@ -278,7 +311,9 @@ def create_mcp_server() -> FastMCP:
             JSON 对象，包含每个 ID 的处理结果。
         """
         if not event_ids:
-            return json.dumps({"acknowledged": [], "failed": []})
+            return json.dumps({"status": "skipped", "reason": "no_ids"})
+        if _recording_backend():
+            raise RuntimeError("fitbit recording backend 不允许确认事件")
 
         acknowledged = []
         failed = []
@@ -295,6 +330,16 @@ def create_mcp_server() -> FastMCP:
                 logger.error("acknowledge %s 失败: %s", eid, e)
                 failed.append(eid)
 
-        return json.dumps({"acknowledged": acknowledged, "failed": failed})
+        payload = (
+            {"status": "committed", "ids": acknowledged}
+            if not failed and acknowledged == event_ids
+            else {
+                "status": "failure",
+                "error": "Fitbit 事件未完整确认",
+                "retryable": True,
+                "failed_ids": failed,
+            }
+        )
+        return json.dumps(payload, ensure_ascii=False)
 
     return mcp

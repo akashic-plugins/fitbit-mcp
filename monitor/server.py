@@ -466,7 +466,9 @@ SERVER_HOST = str(
     _get_cfg(CONFIG, ("server", "host"), DEFAULT_CONFIG["server"]["host"])
 )
 SERVER_PORT = _as_int(
-    _get_cfg(CONFIG, ("server", "port"), DEFAULT_CONFIG["server"]["port"]), 18765
+    os.environ.get("FITBIT_MONITOR_PORT")
+    or _get_cfg(CONFIG, ("server", "port"), DEFAULT_CONFIG["server"]["port"]),
+    18765,
 )
 SERVER_LOG_LEVEL = str(
     _get_cfg(CONFIG, ("server", "log_level"), DEFAULT_CONFIG["server"]["log_level"])

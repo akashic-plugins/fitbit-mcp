@@ -1,22 +1,25 @@
 from __future__ import annotations
 
-import shutil
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 
 import requests
 from pydantic import BaseModel, Field
 
-from agent.plugins import (
-    ManagedServiceSpec,
-    McpServerSpec,
-    MobileUiContribution,
+from agent.plugin_composition import (
+    MANAGED_PROCESSES,
+    MCP_SERVERS,
+    PROACTIVE_COMPONENTS,
+    UI_SLOTS,
+    Context,
+    EndpointEnv,
+    ManagedProcessDefinition,
+    McpServerDefinition,
+    MobileUiDefinition,
     MobileUiNavigation,
-    Plugin,
-    ProactiveSourceSpec,
+    MobileUiRpcInvalidRequest,
+    ProactiveSourceDefinition,
 )
-from agent.plugins.mobile_ui import MobileUiRpcInvalidRequest
 
 
 _MONITOR_URL = "http://127.0.0.1:18765"
@@ -196,113 +199,106 @@ class FitbitConfig(BaseModel):
     proactive: FitbitProactiveConfig = Field(default_factory=FitbitProactiveConfig)
 
 
-class FitbitPlugin(Plugin):
-    api_version = 2
-    name = "fitbit"
-    version = "1.4.0"
-    desc = "Fitbit health monitor and sleep model"
-    ConfigModel = FitbitConfig
+api_version = 3
+name = "fitbit"
+version = "3.0.0"
+desc = "Fitbit health monitor and sleep model"
+Config = FitbitConfig
+inject = (MANAGED_PROCESSES, MCP_SERVERS, PROACTIVE_COMPONENTS, UI_SLOTS)
+dashboard_module = "dashboard.py"
 
-    @classmethod
-    def mobile_ui(cls) -> MobileUiContribution:
-        return MobileUiContribution(
+
+async def apply(ctx: Context, config: FitbitConfig) -> None:
+    """登记 Fitbit 进程、MCP、主动源和移动端只读投影。"""
+
+    # 1. Core 独占 monitor 端口、进程健康和 MCP endpoint 投影。
+    await ctx.require(MANAGED_PROCESSES).register(
+        ctx,
+        ManagedProcessDefinition(
+            name="monitor",
+            command=("python", "monitor/server.py"),
+            cwd=".",
+            port_env="FITBIT_MONITOR_PORT",
+            formal_port=18765,
+            readiness_path="/api/data",
+            startup_timeout_seconds=15.0,
+        ),
+    )
+    await ctx.require(MCP_SERVERS).register(
+        ctx,
+        McpServerDefinition(
+            name="fitbit",
+            command=("python", "run_mcp.py"),
+            required_tools=(
+                "get_proactive_events",
+                "get_sleep_context",
+                "acknowledge_events",
+            ),
+            candidate_read_only_tools=(
+                "get_proactive_events",
+                "get_sleep_context",
+            ),
+            endpoint_env=(EndpointEnv("FITBIT_MONITOR_PORT", "monitor"),),
+            candidate_env={"FITBIT_BACKEND": "recording"},
+        ),
+    )
+
+    # 2. 主动源只消费 typed fetch/ack，不直接持有 monitor 或进程。
+    if config.proactive.enabled:
+        proactive = ctx.require(PROACTIVE_COMPONENTS)
+        await proactive.register(
+            ctx,
+            ProactiveSourceDefinition(
+                name="health_alerts",
+                channels=("alert",),
+                mcp_server="fitbit",
+                fetch_tool="get_proactive_events",
+                ack_tool="acknowledge_events",
+            ),
+        )
+        await proactive.register(
+            ctx,
+            ProactiveSourceDefinition(
+                name="sleep_context",
+                channels=("context",),
+                mcp_server="fitbit",
+                fetch_tool="get_sleep_context",
+            ),
+        )
+
+    # 3. 静态资产与同步只读查询绑定当前 exact Root。
+    await ctx.require(UI_SLOTS).register_mobile(
+        ctx,
+        MobileUiDefinition(
             module="mobile_panel.js",
             stylesheet="mobile_panel.css",
             navigation=MobileUiNavigation(
                 label="健康状态",
                 description="查看当前心率、血氧、步数和最近睡眠节律",
             ),
-        )
+        ),
+        query=_mobile_ui_query,
+    )
 
-    @classmethod
-    def dashboard_module(cls) -> str:
-        return "dashboard.py"
 
-    @classmethod
-    def mcp_servers(cls) -> list[McpServerSpec]:
-        return [McpServerSpec(name="fitbit", command=("python", "run_mcp.py"))]
+def _mobile_ui_query(
+    method: str,
+    payload: dict[str, object],
+    *,
+    session_id: str | None,
+    turn_id: str | None,
+) -> dict[str, object]:
+    """按数据源独立返回当前健康或睡眠历史投影。"""
 
-    @classmethod
-    def managed_services(cls) -> list[ManagedServiceSpec]:
-        return [
-            ManagedServiceSpec(
-                id="monitor",
-                command=("python", "monitor/server.py"),
-                cwd="monitor",
-                readiness_url="http://127.0.0.1:18765/api/data",
-                startup_timeout_seconds=15,
-            )
-        ]
+    # 1. 插件边界只暴露两种只读投影。
+    _ = payload, session_id, turn_id
+    readers = {
+        "fitbit.current": FitbitMobileDashboardReader.get_current,
+        "fitbit.sleep_history": FitbitMobileDashboardReader.get_sleep_history,
+    }
+    reader_method = readers.get(method)
+    if reader_method is None:
+        raise MobileUiRpcInvalidRequest(f"未知 fitbit 移动方法: {method}")
 
-    def proactive_sources(self) -> list[ProactiveSourceSpec]:
-        config = cast(FitbitConfig, self.context.config)
-        if not config.proactive.enabled:
-            return []
-        return [
-            ProactiveSourceSpec(
-                id="health_alerts",
-                channels=("alert",),
-                server="fitbit",
-                fetch_tool="get_proactive_events",
-                ack_tool="acknowledge_events",
-            ),
-            ProactiveSourceSpec(
-                id="sleep_context",
-                channels=("context",),
-                server="fitbit",
-                fetch_tool="get_sleep_context",
-            ),
-        ]
-
-    def mobile_ui_query(
-        self,
-        method: str,
-        payload: dict[str, object],
-        *,
-        session_id: str | None,
-        turn_id: str | None,
-    ) -> dict[str, object]:
-        """按数据源独立返回当前健康或睡眠历史投影。"""
-
-        # 1. 插件边界只暴露两种只读投影
-        _ = payload, session_id, turn_id
-        readers = {
-            "fitbit.current": FitbitMobileDashboardReader.get_current,
-            "fitbit.sleep_history": FitbitMobileDashboardReader.get_sleep_history,
-        }
-        reader_method = readers.get(method)
-        if reader_method is None:
-            raise MobileUiRpcInvalidRequest(f"未知 fitbit 移动方法: {method}")
-
-        # 2. 调度器已把同步查询隔离到专用线程池
-        reader = FitbitMobileDashboardReader()
-        return reader_method(reader)
-
-    def activate(self) -> None:
-        data_dir = self.context.data_dir
-        if data_dir is None:
-            return
-        data_dir.mkdir(parents=True, exist_ok=True)
-        self._migrate_legacy_state(data_dir)
-
-    def _migrate_legacy_state(self, data_dir: Path) -> None:
-        workspace = self.context.workspace
-        if workspace is None:
-            return
-        legacy = workspace / "mcp" / "fitbit-mcp" / "monitor"
-        if not legacy.is_dir():
-            return
-        for name in (
-            "monitor.config.toml",
-            "monitor.config.local.toml",
-            "tokens.json",
-            "sleep_log.jsonl",
-            "sleep_labels.json",
-            "sleep_model.pkl",
-            "stat_events.json",
-            "stat_events_v2.json",
-        ):
-            source = legacy / name
-            target = data_dir / name
-            if source.exists() and not target.exists():
-                shutil.copy2(source, target)
+    # 2. Core 调度器会把同步查询隔离到专用线程池。
+    return reader_method(FitbitMobileDashboardReader())
