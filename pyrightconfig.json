@@ -1,0 +1,13 @@
+{
+  "include": ["plugin.py", "dashboard.py", "src", "monitor", "scripts", "tests"],
+  "exclude": ["**/__pycache__"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.13",
+      "extraPaths": [".akashic-core"]
+    }
+  ]
+}

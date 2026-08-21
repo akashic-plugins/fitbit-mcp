@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 
+from agent.plugin_composition import DashboardContext
+
 
 _MONITOR_URL = "http://127.0.0.1:18765"
 
 
-def register(app: FastAPI, plugin_dir: object, workspace: object) -> None:
+def register(app: FastAPI, context: DashboardContext) -> None:
     """Expose the monitor's current snapshot through the Akashic Dashboard."""
 
-    _ = plugin_dir, workspace
+    _ = context
 
     @app.get("/api/dashboard/fitbit/overview")
     def overview() -> dict[str, object]:
@@ -71,7 +73,7 @@ def _project_dashboard_snapshot(payload: Mapping[str, object]) -> dict[str, obje
 def _project_overview(
     data: Mapping[str, object],
     snapshot: Mapping[str, object],
-    history: list[object] | None = None,
+    history: Sequence[object] | None = None,
 ) -> dict[str, object]:
     """Validate monitor payloads and build the Dashboard first-screen DTO."""
 
@@ -113,7 +115,7 @@ def _project_overview(
     }
 
 
-def _prediction_events(rows: list[object]) -> list[dict[str, object]]:
+def _prediction_events(rows: Sequence[object]) -> list[dict[str, object]]:
     """Project stored model outputs separately from final sleep decisions."""
 
     events: list[dict[str, object]] = []
