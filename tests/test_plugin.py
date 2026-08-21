@@ -33,7 +33,6 @@ from plugin import FitbitConfig, _mobile_ui_query
 
 ROOT = Path(__file__).resolve().parents[1]
 
-
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
