@@ -28,6 +28,7 @@ def _stage_plugin(tmp_path: Path) -> Path:
             ".git",
             ".akashic-core",
             ".pytest_cache",
+            ".venv",
             "__pycache__",
             "node_modules",
         ),
