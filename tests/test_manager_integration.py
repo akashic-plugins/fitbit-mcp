@@ -26,6 +26,7 @@ def _stage_plugin(tmp_path: Path) -> Path:
         source,
         ignore=shutil.ignore_patterns(
             ".git",
+            ".akashic-core",
             ".pytest_cache",
             "__pycache__",
             "node_modules",
