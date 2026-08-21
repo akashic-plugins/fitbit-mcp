@@ -69,7 +69,7 @@ jobs:
         env:
           PYTHONPATH: .akashic-core
         run: >-
-          .venv/bin/basedpyright --level error
+          .venv/bin/pyright --pythonpath .venv/bin/python --level error
           plugin.py dashboard.py src/mcp_bridge.py
           scripts/migrate_v2_data.py
           tests/test_plugin.py tests/test_dashboard.py
