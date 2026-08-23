@@ -106,9 +106,10 @@ async def apply(ctx: Context, config: FitbitConfig) -> None:
         return runtime.close
 
     _ = await ctx.effect(setup, label="fitbit-content-runtime")
+    poll_health = await ctx.health("fitbit-content-poll")
 
     async def start(_event: object) -> None:
-        await runtime.start()
+        await runtime.start(ctx, poll_health)
 
     async def stop(_event: object) -> None:
         await runtime.close()

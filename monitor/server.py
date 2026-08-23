@@ -16,7 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 import uvicorn
 
-from runtime_env import resolve_server_port
+from runtime_env import RotatingTextLog, resolve_server_port
 import sleep_model
 import retrain_guard
 import build_sleep_diff_report
@@ -86,7 +86,7 @@ def _install_runtime_log_mirror() -> None:
         return
     try:
         RUNTIME_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        log_f = RUNTIME_LOG_FILE.open("a", encoding="utf-8", buffering=1)
+        log_f = RotatingTextLog(RUNTIME_LOG_FILE)
     except Exception:
         return
     log_f.write(

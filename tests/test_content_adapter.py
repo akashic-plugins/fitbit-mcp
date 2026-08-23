@@ -17,9 +17,9 @@ from urllib.parse import unquote
 
 import pytest
 from agent.control.timer import AsyncioOneShotTimer
-from agent.plugin_composition import PluginTimers
+from agent.plugin_composition import CompositionRoot, PluginTimers
 from plugins.content import plugin as content_plugin
-from plugins.content.store import ContentStore
+from plugins.content.store import ContentIdentityConflict, ContentStore
 
 from src.content_adapter import (
     BoundContentSource,
@@ -168,6 +168,49 @@ def test_batch_identity_does_not_depend_on_monitor_queue_order() -> None:
     assert stable_batch_id((first, second)) == stable_batch_id((second, first))
 
 
+def test_reordered_monitor_batch_replays_identical_content_sequence(tmp_path) -> None:
+    second_event = {
+        "id": "fitbit:event-2",
+        "type": "spo2_low",
+        "message": "血氧偏低",
+        "severity": "high",
+        "created_at": "2026-08-23 08:01",
+        "suggested_tone": "先确认状态",
+        "metrics": {"spo2": 89},
+    }
+    first_snapshot = {
+        **SNAPSHOT,
+        "health_events": [
+            cast(list[Mapping[str, object]], SNAPSHOT["health_events"])[0],
+            second_event,
+        ],
+    }
+    reordered = {
+        **first_snapshot,
+        "health_events": list(reversed(first_snapshot["health_events"])),
+    }
+    first_items = normalize_health_events(first_snapshot)
+    second_items = normalize_health_events(reordered)
+    assert second_items == first_items
+
+    control_store = ContentStore(tmp_path / "conflict-control.sqlite3")
+    control_store.initialize()
+    control = _bound(control_store)
+    batch_id = stable_batch_id(first_items)
+    _ = control.submit(batch_id, first_items)
+    with pytest.raises(ContentIdentityConflict):
+        _ = control.submit(batch_id, tuple(reversed(first_items)))
+
+    content_store = ContentStore(tmp_path / "content.sqlite3")
+    content_store.initialize()
+    bound = _bound(content_store)
+    first_receipt = bound.submit(batch_id, first_items)
+    replay_receipt = bound.submit(batch_id, second_items)
+
+    assert replay_receipt == first_receipt
+    assert content_store.state_counts() == {"pending": 2}
+
+
 @pytest.mark.asyncio
 async def test_reload_has_only_one_real_timer_wait(tmp_path: Path) -> None:
     active = 0
@@ -202,19 +245,86 @@ async def test_reload_has_only_one_real_timer_wait(tmp_path: Path) -> None:
         )
 
     first = make_runtime()
-    await first.start()
+    first_root = CompositionRoot("fitbit-reload:first")
+    first_health = await first_root.context.health("fitbit-content-poll")
+    await first.start(first_root.context, first_health)
     await entered.wait()
     assert active == 1
     await first.close()
     assert active == 0
+    await first_root.dispose()
 
     entered.clear()
     second = make_runtime()
-    await second.start()
+    second_root = CompositionRoot("fitbit-reload:second")
+    second_health = await second_root.context.health("fitbit-content-poll")
+    await second.start(second_root.context, second_health)
     await entered.wait()
     assert active == 1
     assert maximum == 1
     await second.close()
+    await second_root.dispose()
+
+
+@pytest.mark.asyncio
+async def test_transient_oserror_rearms_and_recovers_without_partial_state(
+    tmp_path: Path,
+) -> None:
+    sleeper_calls = 0
+    third_wait = asyncio.Event()
+
+    async def sleeper(_delay: float) -> None:
+        nonlocal sleeper_calls
+        sleeper_calls += 1
+        if sleeper_calls <= 2:
+            return
+        third_wait.set()
+        await asyncio.Future()
+
+    class FailOnceMonitor(RecordingMonitor):
+        def __init__(self) -> None:
+            super().__init__(SNAPSHOT)
+            self.snapshot_calls = 0
+
+        def snapshot(self) -> Mapping[str, object]:
+            self.snapshot_calls += 1
+            if self.snapshot_calls == 1:
+                raise OSError("temporary monitor read failure")
+            return super().snapshot()
+
+    content_store = ContentStore(tmp_path / "content.sqlite3")
+    content_store.initialize()
+    adapter = FitbitAdapterStore(tmp_path / "adapter.sqlite3")
+    adapter.initialize(NOW)
+    monitor = FailOnceMonitor()
+    runtime = FitbitContentRuntime(
+        adapter,
+        PluginTimers(AsyncioOneShotTimer(clock=lambda: NOW, sleeper=sleeper)),
+        _bound(content_store),
+        cast(FitbitMonitorClient, monitor),
+        poll_interval=timedelta(minutes=5),
+        sleep_ttl=timedelta(minutes=10),
+        now=lambda: NOW,
+    )
+    root = CompositionRoot("fitbit-transient-retry")
+    health = await root.context.health("fitbit-content-poll")
+
+    await runtime.start(root.context, health)
+    await third_wait.wait()
+
+    assert sleeper_calls == 3
+    assert monitor.snapshot_calls == 2
+    assert health.healthy
+    assert content_store.state_counts() == {"pending": 1}
+    assert adapter.next_due() == NOW + timedelta(minutes=5)
+    assert monitor.acknowledged == []
+    assert any(
+        incident.kind == "fitbit_content_retry"
+        and "temporary monitor read failure" in incident.message
+        for incident in root.receipt().incidents
+    )
+    await runtime.close()
+    await root.dispose()
 
 
 class _MonitorState:

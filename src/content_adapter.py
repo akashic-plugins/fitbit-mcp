@@ -11,7 +11,7 @@ from urllib.parse import quote
 import requests
 
 from agent.control.timer import TimerHandle, TimerStatus
-from agent.plugin_composition import PluginTimers
+from agent.plugin_composition import Context, HealthHandle, PluginTimers
 from src.sleep_context import FitbitAdapterStore
 
 
@@ -23,6 +23,10 @@ class BoundContentSource(Protocol):
     def unsettled(self, limit: int = 100) -> tuple[Mapping[str, object], ...]: ...
 
     def ack(self, settlement_ref: str) -> Mapping[str, object]: ...
+
+
+class FitbitMonitorTransientError(RuntimeError):
+    """表示 monitor HTTP/IO 边界可在下一次 Timer 重试。"""
 
 
 class FitbitMonitorClient:
@@ -86,14 +90,15 @@ class FitbitContentRuntime:
         self._task: asyncio.Task[None] | None = None
         self._closed = False
 
-    async def start(self) -> None:
-        """恢复来源 deadline，并登记唯一正式 Timer。"""
+    async def start(self, ctx: Context, health: HealthHandle) -> None:
+        """恢复来源 deadline，并启动唯一 Fiber-owned 采集循环。"""
 
         if self._closed:
             raise RuntimeError("Fitbit Content runtime 已关闭")
-        if self._handle is not None:
-            return
-        self._arm(self._store.next_due())
+        if self._task is None:
+            self._task = await ctx.spawn(
+                self._run(ctx, health), name="fitbit-content-poll"
+            )
 
     async def close(self) -> None:
         """取消自有等待，不改写 Content 或来源事实。"""
@@ -110,29 +115,30 @@ class FitbitContentRuntime:
         if handle is not None:
             await handle.cleanup()
 
-    def _arm(self, deadline: datetime) -> None:
-        if self._closed or self._handle is not None:
-            return
-        handle = self._timers.schedule(deadline)
-        self._handle = handle
-        self._task = asyncio.create_task(
-            self._wait_tick_rearm(handle), name="fitbit:content-poll"
-        )
+    async def _run(self, ctx: Context, health: HealthHandle) -> None:
+        """轮询、显式记录临时失败，并只在可恢复结果后重臂。"""
 
-    async def _wait_tick_rearm(self, handle: TimerHandle) -> None:
-        """Timer 到点后执行一次采集，再从持久状态重新登记。"""
-
-        try:
-            receipt = await handle.result()
-            if receipt.status is TimerStatus.CANCELLED or self._closed:
-                return
-            await asyncio.to_thread(self.tick)
-        finally:
-            self._handle = None
-            self._task = None
-            await handle.cleanup()
-        if not self._closed:
-            self._arm(self._store.next_due())
+        deadline = self._store.next_due()
+        while not self._closed:
+            handle = self._timers.schedule(deadline)
+            self._handle = handle
+            try:
+                receipt = await handle.result()
+                if receipt.status is TimerStatus.CANCELLED or self._closed:
+                    return
+                try:
+                    await asyncio.to_thread(self.tick)
+                except FitbitMonitorTransientError as error:
+                    reason = f"{type(error).__name__}: {error}"
+                    health.degrade(reason)
+                    _ = ctx.report_incident("fitbit_content_retry", reason)
+                    deadline = _aware(self._now()) + self._poll_interval
+                else:
+                    health.recover()
+                    deadline = self._store.next_due()
+            finally:
+                self._handle = None
+                await handle.cleanup()
 
     def tick(self) -> None:
         """先结算历史投递，再发布当前 monitor 快照。"""
@@ -141,7 +147,7 @@ class FitbitContentRuntime:
         self._drain_unsettled()
 
         # 2. 只拉取一次，独立归一化健康事件，并优先提交 Content
-        snapshot = self._monitor.snapshot()
+        snapshot = self._monitor_snapshot()
         items = normalize_health_events(snapshot)
         batch_id = stable_batch_id(items)
         _ = self._content.submit(batch_id, items)
@@ -163,7 +169,7 @@ class FitbitContentRuntime:
                 payload = _mapping(row, "payload")
                 event_id = _string(payload, "upstream_event_id")
                 settlement_ref = _string(row, "settlement_ref")
-                self._monitor.ensure_not_pending(event_id)
+                self._ensure_not_pending(event_id)
                 if self._after_provider_ack is not None:
                     self._after_provider_ack()
                 settled = self._content.ack(settlement_ref)
@@ -173,6 +179,18 @@ class FitbitContentRuntime:
                     )
             if len(rows) < 100:
                 return
+
+    def _monitor_snapshot(self) -> Mapping[str, object]:
+        try:
+            return self._monitor.snapshot()
+        except (OSError, requests.RequestException) as error:
+            raise FitbitMonitorTransientError(str(error)) from error
+
+    def _ensure_not_pending(self, event_id: str) -> None:
+        try:
+            self._monitor.ensure_not_pending(event_id)
+        except (OSError, requests.RequestException) as error:
+            raise FitbitMonitorTransientError(str(error)) from error
 
 
 def normalize_health_events(
@@ -209,7 +227,12 @@ def normalize_health_events(
                 "requires_ack": True,
             }
         )
-    return tuple(items)
+    return tuple(
+        sorted(
+            items,
+            key=lambda item: (str(item["item_id"]), str(item["revision"])),
+        )
+    )
 
 
 def normalize_sleep(snapshot: Mapping[str, object]) -> Mapping[str, object]:
