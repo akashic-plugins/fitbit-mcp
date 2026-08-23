@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
-from monitor.runtime_env import RotatingTextLog, resolve_server_port
+from monitor.runtime_env import (
+    RUNTIME_LOG_BACKUPS,
+    RUNTIME_LOG_MAX_BYTES,
+    RotatingTextLog,
+    resolve_server_port,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MONITOR_DIR = ROOT / "monitor"
 
 
 def test_server_port_uses_config_without_runtime_override(
@@ -58,4 +70,45 @@ def test_runtime_log_rotates_without_touching_authoritative_state(tmp_path: Path
         path.stat().st_size
         for path in tmp_path.glob("monitor.runtime.log*")
     ) <= 36
+    assert {path: path.read_bytes() for path in protected} == protected
+
+
+def test_preredirected_runtime_log_uses_bounded_rotator(tmp_path: Path) -> None:
+    runtime_log = tmp_path / "monitor.runtime.log"
+    protected = {
+        tmp_path / "stat_events.json": b'{"events": [], "last_event_time": {}}',
+        tmp_path / "stat_events_v2.json": b'{"pending": [], "acked_ids": []}',
+        tmp_path / "content.sqlite3": b"content-fact",
+        tmp_path / "sessions.db": b"session-fact",
+    }
+    for path, payload in protected.items():
+        path.write_bytes(payload)
+    runtime_log.write_bytes(b"P" * RUNTIME_LOG_MAX_BYTES)
+
+    script = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import server
+for index in range(6):
+    print(f"runtime-line-{index}:" + "X" * 700_000, flush=True)
+"""
+    env = os.environ.copy()
+    env["AKA_PLUGIN_DATA_DIR"] = str(tmp_path)
+    with runtime_log.open("ab", buffering=0) as redirected:
+        subprocess.run(
+            [sys.executable, "-c", script, str(MONITOR_DIR)],
+            check=True,
+            env=env,
+            stdout=redirected,
+            stderr=redirected,
+        )
+
+    backups = sorted(tmp_path.glob("monitor.runtime.log.*"))
+    assert runtime_log.stat().st_size <= RUNTIME_LOG_MAX_BYTES
+    assert backups
+    assert len(backups) <= RUNTIME_LOG_BACKUPS
+    assert all(path.stat().st_size <= RUNTIME_LOG_MAX_BYTES for path in backups)
+    assert not runtime_log.with_name(
+        f"monitor.runtime.log.{RUNTIME_LOG_BACKUPS + 1}"
+    ).exists()
     assert {path: path.read_bytes() for path in protected} == protected
