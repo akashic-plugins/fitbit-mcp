@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
@@ -26,7 +26,7 @@ def _tree_digest(root: Path) -> str:
 
 
 def _stage_plugin(tmp_path: Path) -> Path:
-    """复制可执行 artifact，并复用当前测试解释器的依赖环境。"""
+    """复制可执行 artifact，并挂载调用方明确选择的依赖环境。"""
 
     source = tmp_path / "plugins" / "fitbit"
     shutil.copytree(
@@ -41,14 +41,34 @@ def _stage_plugin(tmp_path: Path) -> Path:
             "node_modules",
         ),
     )
-    (source / ".venv").symlink_to(
-        Path(sys.executable).parent.parent,
-        target_is_directory=True,
-    )
+    fixture_python = Path(os.environ["AKASHIC_PLUGIN_FIXTURE_PYTHON"])
+    (source / ".venv").symlink_to(fixture_python.parent.parent, target_is_directory=True)
     content_source = Path(content_plugin.__file__).resolve().parent
     content_target = source.parent / "content"
     shutil.copytree(content_source, content_target)
     return source
+
+
+def test_stage_plugin_uses_explicit_fixture_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_python = tmp_path / "artifact" / ".venv" / "bin" / "python"
+    monkeypatch.setenv("AKASHIC_PLUGIN_FIXTURE_PYTHON", str(artifact_python))
+
+    plugin_root = _stage_plugin(tmp_path / "stage")
+
+    assert (plugin_root / ".venv").readlink() == artifact_python.parent.parent
+
+
+def test_stage_plugin_requires_explicit_fixture_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AKASHIC_PLUGIN_FIXTURE_PYTHON", raising=False)
+
+    with pytest.raises(KeyError, match="AKASHIC_PLUGIN_FIXTURE_PYTHON"):
+        _stage_plugin(tmp_path)
 
 
 @pytest.mark.asyncio
