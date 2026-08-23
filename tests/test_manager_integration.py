@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sys
 from pathlib import Path
 
 import pytest
+from agent.plugin_composition import TIMERS
 from agent.plugins.generation import PluginGeneration
 from agent.plugins.manager import PluginManager
 from agent.plugins.snapshot import RuntimeSnapshot
@@ -13,6 +15,14 @@ from plugins.content import plugin as content_plugin
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def _stage_plugin(tmp_path: Path) -> Path:
@@ -78,6 +88,8 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         stable_route = stable_runtime.mcp.server("fitbit").route()
         assert stable_route.mode == "formal"
         await stable_route.aclose()
+        formal_data = tmp_path / "workspace/plugin-data/fitbit-builtin"
+        formal_digest = _tree_digest(formal_data)
 
         # 2. 新版本先在隔离 Root 中验证，再重建 formal Root。
         for relative in ("plugin.py", "akashic.plugin.toml"):
@@ -92,6 +104,9 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         validation_root = candidate.validation_workspace.parent
         candidate_snapshot = candidate.runtime_snapshot
         assert candidate_snapshot.composition_root is not None
+        assert candidate_snapshot.composition_root.context.require(TIMERS).formal is False
+        assert candidate.validation_workspace != tmp_path / "workspace"
+        assert _tree_digest(formal_data) == formal_digest
         original_invariants = manager._post_publish_invariants  # pyright: ignore[reportPrivateUsage]
         candidate_checked = False
 
