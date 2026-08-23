@@ -28,6 +28,7 @@ def _tree_digest(root: Path) -> str:
 def _stage_plugin(tmp_path: Path) -> Path:
     """复制可执行 artifact，并挂载调用方明确选择的依赖环境。"""
 
+    fixture_python = Path(os.environ["AKASHIC_PLUGIN_FIXTURE_PYTHON"])
     source = tmp_path / "plugins" / "fitbit"
     shutil.copytree(
         ROOT,
@@ -41,7 +42,6 @@ def _stage_plugin(tmp_path: Path) -> Path:
             "node_modules",
         ),
     )
-    fixture_python = Path(os.environ["AKASHIC_PLUGIN_FIXTURE_PYTHON"])
     (source / ".venv").symlink_to(fixture_python.parent.parent, target_is_directory=True)
     content_source = Path(content_plugin.__file__).resolve().parent
     content_target = source.parent / "content"
@@ -69,6 +69,22 @@ def test_stage_plugin_requires_explicit_fixture_python(
 
     with pytest.raises(KeyError, match="AKASHIC_PLUGIN_FIXTURE_PYTHON"):
         _stage_plugin(tmp_path)
+
+    assert not (tmp_path / "plugins").exists()
+
+
+def test_ci_creates_and_exports_absolute_fixture_python_before_pytest() -> None:
+    workflow = (ROOT / ".github/workflows/plugin-api-v3.yml").read_text(
+        encoding="utf-8"
+    )
+
+    create_runtime = workflow.index("python -m venv .venv")
+    export_runtime = workflow.index(
+        "AKASHIC_PLUGIN_FIXTURE_PYTHON: ${{ github.workspace }}/.venv/bin/python"
+    )
+    run_pytest = workflow.index("run: .venv/bin/python -m pytest -q tests/")
+
+    assert create_runtime < export_runtime < run_pytest
 
 
 @pytest.mark.asyncio

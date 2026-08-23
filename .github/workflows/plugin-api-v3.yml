@@ -55,6 +55,7 @@ jobs:
       - name: Verify Fitbit v3 composition
         env:
           AKASHIC_AGENT_ROOT: .akashic-core
+          AKASHIC_PLUGIN_FIXTURE_PYTHON: ${{ github.workspace }}/.venv/bin/python
           PYTHONPATH: .akashic-core
         run: .venv/bin/python -m pytest -q tests/
       - uses: actions/setup-node@v4
