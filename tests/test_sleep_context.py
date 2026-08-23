@@ -42,6 +42,24 @@ def _store(path: Path) -> FitbitAdapterStore:
     return store
 
 
+def test_sleep_cache_overwrites_one_current_projection(tmp_path: Path) -> None:
+    store = _store(tmp_path / "adapter.sqlite3")
+    store.commit_snapshot(
+        {
+            "state": "awake",
+            "prob": 0.05,
+            "prob_source": "model",
+            "data_lag_min": 1,
+        },
+        observed_at=NOW + timedelta(minutes=5),
+        expires_at=NOW + timedelta(minutes=15),
+        next_due=NOW + timedelta(minutes=10),
+    )
+
+    current = store.current_sleep(NOW + timedelta(minutes=6))
+    assert current is not None and current["state"] == "awake"
+
+
 @pytest.mark.asyncio
 async def test_wake_duty_and_fresh_sleep_hint_coexist(tmp_path: Path) -> None:
     ctx = _ctx("wake", NOW + timedelta(minutes=2))

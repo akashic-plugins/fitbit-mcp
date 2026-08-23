@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -339,3 +340,11 @@ runtime._drain_unsettled()
     )
     runtime._drain_unsettled()
     assert ContentStore(content_path).state_counts() == {"settled": 1}
+    with sqlite3.connect(content_path) as connection:
+        row = connection.execute(
+            "SELECT status, settlement_ref, payload_json FROM items"
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "settled"
+    assert row[1] == "delivery:fitbit:1"
+    assert json.loads(row[2])["upstream_event_id"] == "fitbit:event-1"
