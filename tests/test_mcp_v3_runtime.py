@@ -4,7 +4,6 @@ import json
 from typing import cast
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
 
 from src import mcp_bridge
 
@@ -19,61 +18,58 @@ async def _call(name: str, arguments: dict[str, object]) -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_recording_backend_is_typed_empty_without_monitor_access(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("FITBIT_BACKEND", "recording")
-
-    def forbidden(*args: object, **kwargs: object) -> object:
-        raise AssertionError((args, kwargs))
-
-    monkeypatch.setattr(mcp_bridge.requests, "get", forbidden)
-    monkeypatch.setattr(mcp_bridge.requests, "post", forbidden)
-
-    assert await _call("get_proactive_events", {}) == {"status": "empty"}
-    assert await _call("get_sleep_context", {}) == {"status": "empty"}
-    assert await _call("acknowledge_events", {"event_ids": []}) == {
-        "status": "skipped",
-        "reason": "no_ids",
-    }
-    with pytest.raises(ToolError, match="recording backend 不允许确认事件"):
-        _ = await _call("acknowledge_events", {"event_ids": ["event-1"]})
+async def test_mcp_exposes_only_ordinary_fitbit_read_tools() -> None:
+    tools = await mcp_bridge.create_mcp_server().list_tools()
+    assert [tool.name for tool in tools] == [
+        "fitbit_health_snapshot",
+        "fitbit_sleep_report",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_formal_fetch_and_ack_encode_explicit_results(
+async def test_health_snapshot_uses_monitor_read_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("FITBIT_BACKEND", raising=False)
-    monkeypatch.setattr(
-        mcp_bridge,
-        "_fetch_agent_payload",
-        lambda timeout: {
-            "health_events": [
-                {
-                    "id": "event-1",
-                    "type": "high_hr",
-                    "message": "心率偏高",
-                    "severity": "high",
-                }
-            ]
-        },
-    )
+    calls: list[tuple[str, object]] = []
 
     class Response:
         status_code = 200
 
         @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
         def json() -> dict[str, object]:
-            return {"acknowledged": True}
+            return {"available": True, "heart_rate": 72}
 
-    monkeypatch.setattr(mcp_bridge.requests, "post", lambda *args, **kwargs: Response())
+    def get(url: str, **kwargs: object) -> Response:
+        calls.append((url, kwargs))
+        return Response()
 
-    fetched = await _call("get_proactive_events", {})
-    assert fetched["status"] == "items"
-    items = cast(list[dict[str, object]], fetched["items"])
-    assert [item["event_id"] for item in items] == ["event-1"]
-    assert await _call("acknowledge_events", {"event_ids": ["event-1"]}) == {
-        "status": "committed",
-        "ids": ["event-1"],
+    monkeypatch.setattr(mcp_bridge.requests, "get", get)
+    assert await _call("fitbit_health_snapshot", {}) == {
+        "available": True,
+        "heart_rate": 72,
     }
+    assert calls[0][0].endswith("/api/tool/fitbit_health_snapshot")
+
+
+@pytest.mark.asyncio
+async def test_sleep_report_bounds_days_and_preserves_unauthorized_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class Response:
+        status_code = 401
+
+    def get(_url: str, **kwargs: object) -> Response:
+        calls.append(kwargs)
+        return Response()
+
+    monkeypatch.setattr(mcp_bridge.requests, "get", get)
+    assert await _call("fitbit_sleep_report", {"days": 100}) == {
+        "error": "Fitbit 未授权，请先完成 OAuth 授权。"
+    }
+    assert calls == [{"params": {"days": 30}, "timeout": 10}]

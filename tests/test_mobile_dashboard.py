@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-import plugin
-from plugin import FitbitMobileDashboardReader
+from src import mobile_reader as plugin
+from src.mobile_reader import FitbitMobileDashboardReader
 
 
 class Response:
