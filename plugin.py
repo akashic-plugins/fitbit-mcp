@@ -21,13 +21,13 @@ from agent.plugin_composition import (
     MobileUiNavigation,
     ServiceKey,
 )
-from src.content_adapter import (
+from .src.content_adapter import (
     BoundContentSource,
     FitbitContentRuntime,
     FitbitMonitorClient,
 )
-from src.mobile_reader import mobile_ui_query
-from src.sleep_context import FitbitAdapterStore, SleepContextAppender
+from .src.mobile_reader import mobile_ui_query
+from .src.sleep_context import FitbitAdapterStore, SleepContextAppender
 
 
 class ContentSourceServices(Protocol):
