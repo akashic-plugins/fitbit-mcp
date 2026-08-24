@@ -12,7 +12,7 @@ import requests
 
 from agent.control.timer import TimerHandle, TimerStatus
 from agent.plugin_composition import Context, HealthHandle, PluginTimers
-from src.sleep_context import FitbitAdapterStore
+from .sleep_context import FitbitAdapterStore
 
 
 class BoundContentSource(Protocol):

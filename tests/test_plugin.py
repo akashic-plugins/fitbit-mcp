@@ -27,8 +27,8 @@ from agent.plugins.composable import ComposablePlugin
 from agent.plugins.static_manifest import load_static_plugin_manifest
 from plugins.content import plugin as content_plugin
 
-import plugin as plugin_module
-from plugin import FitbitConfig
+from fitbit_test_plugin import plugin as plugin_module  # pyright: ignore[reportMissingImports]
+from fitbit_test_plugin.plugin import FitbitConfig  # pyright: ignore[reportMissingImports]
 from src import mobile_reader
 from src.mobile_reader import mobile_ui_query
 
