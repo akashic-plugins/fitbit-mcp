@@ -10,13 +10,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta
 from threading import Thread, Lock, Event
 from pathlib import Path
+from typing import TextIO
 import tomllib
 import requests as req
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 import uvicorn
 
-from runtime_env import resolve_server_port
+from runtime_env import RotatingTextLog, resolve_server_port
 import sleep_model
 import retrain_guard
 import build_sleep_diff_report
@@ -64,7 +65,7 @@ class _TeeTextIO:
         return True
 
 
-def _stream_points_to(path: Path, stream) -> bool:
+def _stream_points_to(path: Path, stream: TextIO) -> bool:
     try:
         stream_fd = stream.fileno()
         stream_stat = os.fstat(stream_fd)
@@ -77,26 +78,58 @@ def _stream_points_to(path: Path, stream) -> bool:
     )
 
 
+def _runtime_log_stream_fds(path: Path, streams: tuple[TextIO, ...]) -> set[int]:
+    """Collect inherited descriptors that write directly to the runtime log."""
+
+    redirected_fds: set[int] = set()
+    for stream in streams:
+        if not _stream_points_to(path, stream):
+            continue
+        stream.flush()
+        redirected_fds.add(stream.fileno())
+    return redirected_fds
+
+
+def _detach_stream_fds(stream_fds: set[int]) -> None:
+    """Detach direct writers so all later text passes through the rotator."""
+
+    for stream_fd in stream_fds:
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull_fd, stream_fd)
+        finally:
+            os.close(devnull_fd)
+
+
 def _install_runtime_log_mirror() -> None:
-    """
-    保证无论通过何种方式启动，stdout/stderr 都会写入 monitor.runtime.log。
-    若上层已重定向到同一个文件，则不重复包裹，避免双写。
-    """
-    if isinstance(sys.stdout, _TeeTextIO) or isinstance(sys.stderr, _TeeTextIO):
+    """Route stdout/stderr through the bounded runtime diagnostic log."""
+
+    # 1. 重复导入保持同一份 rotator；部分安装属于内部合同错误
+    installed = (
+        isinstance(sys.stdout, _TeeTextIO),
+        isinstance(sys.stderr, _TeeTextIO),
+    )
+    if installed == (True, True):
         return
-    try:
-        RUNTIME_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        log_f = RUNTIME_LOG_FILE.open("a", encoding="utf-8", buffering=1)
-    except Exception:
-        return
+    if any(installed):
+        raise RuntimeError("runtime log mirror 处于部分安装状态")
+
+    # 2. 先记住旧 inode 的直接写入者，再建立 rotator 并解除它们
+    RUNTIME_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    redirected_fds = _runtime_log_stream_fds(
+        RUNTIME_LOG_FILE,
+        (sys.stdout, sys.stderr),
+    )
+    log_f = RotatingTextLog(RUNTIME_LOG_FILE)
+    _detach_stream_fds(redirected_fds)
     log_f.write(
         f"\n===== fitbit-monitor start {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
         f"pid={os.getpid()} =====\n"
     )
-    if not _stream_points_to(RUNTIME_LOG_FILE, sys.stdout):
-        sys.stdout = _TeeTextIO(sys.stdout, log_f)
-    if not _stream_points_to(RUNTIME_LOG_FILE, sys.stderr):
-        sys.stderr = _TeeTextIO(sys.stderr, log_f)
+
+    # 3. 两个流共享唯一 rotator；原始流继续承担终端或父进程可观察性
+    sys.stdout = _TeeTextIO(sys.stdout, log_f)
+    sys.stderr = _TeeTextIO(sys.stderr, log_f)
     atexit.register(log_f.close)
 
 

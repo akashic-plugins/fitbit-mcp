@@ -1,25 +1,34 @@
 from __future__ import annotations
 
-import json
+import hashlib
+import os
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
-from agent.plugins.generation_activity_host import ActivityHost
-from agent.plugins.generation_proactive_host import ProactiveActivityAdapter
+from agent.plugin_composition import TIMERS
 from agent.plugins.generation import PluginGeneration
 from agent.plugins.manager import PluginManager
 from agent.plugins.snapshot import RuntimeSnapshot
 from bus.event_bus import EventBus
+from plugins.content import plugin as content_plugin
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _stage_plugin(tmp_path: Path) -> Path:
-    """复制可执行 artifact，并复用当前测试解释器的依赖环境。"""
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
+
+def _stage_plugin(tmp_path: Path) -> Path:
+    """复制可执行 artifact，并挂载调用方明确选择的依赖环境。"""
+
+    fixture_python = Path(os.environ["AKASHIC_PLUGIN_FIXTURE_PYTHON"])
     source = tmp_path / "plugins" / "fitbit"
     shutil.copytree(
         ROOT,
@@ -33,11 +42,49 @@ def _stage_plugin(tmp_path: Path) -> Path:
             "node_modules",
         ),
     )
-    (source / ".venv").symlink_to(
-        Path(sys.executable).parent.parent,
-        target_is_directory=True,
-    )
+    (source / ".venv").symlink_to(fixture_python.parent.parent, target_is_directory=True)
+    content_source = Path(content_plugin.__file__).resolve().parent
+    content_target = source.parent / "content"
+    shutil.copytree(content_source, content_target)
     return source
+
+
+def test_stage_plugin_uses_explicit_fixture_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_python = tmp_path / "artifact" / ".venv" / "bin" / "python"
+    monkeypatch.setenv("AKASHIC_PLUGIN_FIXTURE_PYTHON", str(artifact_python))
+
+    plugin_root = _stage_plugin(tmp_path / "stage")
+
+    assert (plugin_root / ".venv").readlink() == artifact_python.parent.parent
+
+
+def test_stage_plugin_requires_explicit_fixture_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AKASHIC_PLUGIN_FIXTURE_PYTHON", raising=False)
+
+    with pytest.raises(KeyError, match="AKASHIC_PLUGIN_FIXTURE_PYTHON"):
+        _stage_plugin(tmp_path)
+
+    assert not (tmp_path / "plugins").exists()
+
+
+def test_ci_creates_and_exports_absolute_fixture_python_before_pytest() -> None:
+    workflow = (ROOT / ".github/workflows/plugin-api-v3.yml").read_text(
+        encoding="utf-8"
+    )
+
+    create_runtime = workflow.index("python -m venv .venv")
+    export_runtime = workflow.index(
+        "AKASHIC_PLUGIN_FIXTURE_PYTHON: ${{ github.workspace }}/.venv/bin/python"
+    )
+    run_pytest = workflow.index("run: .venv/bin/python -m pytest -q tests/")
+
+    assert create_runtime < export_runtime < run_pytest
 
 
 @pytest.mark.asyncio
@@ -56,10 +103,6 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         workspace=tmp_path / "workspace",
         installed_cache_root=tmp_path / "home" / "cache",
     )
-    activity = ActivityHost(
-        (ProactiveActivityAdapter(manager.composition_generation_host),)
-    )
-    manager.bind_activity_host(activity)
     stable_snapshot = None
     validation_root = None
     try:
@@ -69,9 +112,8 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         assert stable_snapshot.composition_root is not None
         assert stable_snapshot.mcp_server_registry is not None
         assert stable_snapshot.managed_process_registry is not None
-        assert stable_snapshot.proactive_component_catalog is not None
         assert stable_snapshot.mobile_ui_registry is not None
-        stable_generation = next(iter(stable_snapshot.generations.values()))
+        stable_generation = stable_snapshot.generations["fitbit"]
         stable_runtime = manager.composition_generation_host.get(
             stable_generation.generation_id
         )
@@ -82,12 +124,14 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         stable_route = stable_runtime.mcp.server("fitbit").route()
         assert stable_route.mode == "formal"
         await stable_route.aclose()
+        formal_data = tmp_path / "workspace/plugin-data/fitbit-builtin"
+        formal_digest = _tree_digest(formal_data)
 
         # 2. 新版本先在隔离 Root 中验证，再重建 formal Root。
         for relative in ("plugin.py", "akashic.plugin.toml"):
             path = plugin_root / relative
             path.write_text(
-                path.read_text(encoding="utf-8").replace("3.0.0", "3.0.1"),
+                path.read_text(encoding="utf-8").replace("3.1.0", "3.1.1"),
                 encoding="utf-8",
             )
         candidate = await manager.prepare_candidate("fitbit")
@@ -96,11 +140,9 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         validation_root = candidate.validation_workspace.parent
         candidate_snapshot = candidate.runtime_snapshot
         assert candidate_snapshot.composition_root is not None
-        assert candidate_snapshot.proactive_component_catalog is not None
-        assert (
-            candidate_snapshot.proactive_component_catalog.root_instance_token
-            is candidate_snapshot.composition_root.instance_token
-        )
+        assert candidate_snapshot.composition_root.context.require(TIMERS).formal is False
+        assert candidate.validation_workspace != tmp_path / "workspace"
+        assert _tree_digest(formal_data) == formal_digest
         original_invariants = manager._post_publish_invariants  # pyright: ignore[reportPrivateUsage]
         candidate_checked = False
 
@@ -117,18 +159,9 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
             assert candidate_runtime.mcp is not None
             async with candidate_runtime.mcp.route("fitbit") as candidate_route:
                 assert set(candidate_route.tool_names) == {
-                    "get_proactive_events",
-                    "get_sleep_context",
+                    "fitbit_health_snapshot",
+                    "fitbit_sleep_report",
                 }
-                proactive = await candidate_route.call("get_proactive_events", {})
-                sleep = await candidate_route.call("get_sleep_context", {})
-                assert json.loads(proactive.output) == {"status": "empty"}
-                assert json.loads(sleep.output) == {"status": "empty"}
-                with pytest.raises(PermissionError, match="未获 allowlist 授权"):
-                    _ = await candidate_route.call(
-                        "acknowledge_events",
-                        {"event_ids": ["event-1"]},
-                    )
             candidate_checked = True
             await original_invariants(generation, snapshot)
 
@@ -143,17 +176,11 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         final_snapshot = manager.current_snapshot
         assert final_snapshot is not None and final_snapshot.composition_root is not None
         assert final_snapshot.composition_root is not candidate_snapshot.composition_root
-        assert final_snapshot.proactive_component_catalog is not None
-        assert (
-            final_snapshot.proactive_component_catalog.root_instance_token
-            is final_snapshot.composition_root.instance_token
-        )
         assert not validation_root.exists()
     finally:
         await manager.terminate_all()
 
-    # 3. Manager 终止后进程、MCP、Activity 与 Root effects 全部归零。
-    assert activity.active is None
+    # 3. Manager 终止后进程、MCP 与 Root effects 全部归零。
     assert stable_snapshot is not None and stable_snapshot.composition_root is not None
     assert stable_snapshot.composition_root.receipt().effects == ()
     assert stable_snapshot.composition_root.topology_view().listeners == ()

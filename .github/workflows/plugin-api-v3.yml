@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: kachofugetsu09/akashic-agent
-          ref: 78e50d4dfb3f4348fff37d55d9c9bdd0e002164d
+          ref: 9da3a988a2bf62b0f550bd4f6bb98c4eeb1f56f5
           path: .akashic-core
       - uses: actions/setup-python@v5
         with:
@@ -55,6 +55,7 @@ jobs:
       - name: Verify Fitbit v3 composition
         env:
           AKASHIC_AGENT_ROOT: .akashic-core
+          AKASHIC_PLUGIN_FIXTURE_PYTHON: ${{ github.workspace }}/.venv/bin/python
           PYTHONPATH: .akashic-core
         run: .venv/bin/python -m pytest -q tests/
       - uses: actions/setup-node@v4
@@ -70,11 +71,12 @@ jobs:
           PYTHONPATH: .akashic-core
         run: >-
           .venv/bin/pyright --pythonpath .venv/bin/python --level error
-          plugin.py dashboard.py src/mcp_bridge.py
+          plugin.py dashboard.py src/content_adapter.py src/mcp_bridge.py
+          monitor/runtime_env.py
           scripts/migrate_v2_data.py
-          tests/test_plugin.py tests/test_dashboard.py
+          tests/test_plugin.py tests/test_content_adapter.py tests/test_dashboard.py
           tests/test_manager_integration.py tests/test_mcp_v3_runtime.py
-          tests/test_migrate_v2_data.py
+          tests/test_migrate_v2_data.py tests/test_runtime_env.py
       - name: Compile Python sources
         run: python -m compileall -q plugin.py dashboard.py src monitor scripts tests
       - name: Check diff formatting

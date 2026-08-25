@@ -1,6 +1,6 @@
 schema_version = 1
 name = "fitbit"
-version = "3.0.0"
+version = "3.1.0"
 api_version = 3
 entrypoint = "plugin.py"
 
@@ -37,10 +37,9 @@ startup_timeout_seconds = 15.0
 name = "fitbit"
 command = ["python", "run_mcp.py"]
 required_tools = [
-  "get_proactive_events",
-  "get_sleep_context",
-  "acknowledge_events",
+  "fitbit_health_snapshot",
+  "fitbit_sleep_report",
 ]
-candidate_read_only_tools = ["get_proactive_events", "get_sleep_context"]
+candidate_read_only_tools = ["fitbit_health_snapshot", "fitbit_sleep_report"]
 endpoint_env = [{env = "FITBIT_MONITOR_PORT", process = "monitor"}]
 candidate_env = {FITBIT_BACKEND = "recording"}
