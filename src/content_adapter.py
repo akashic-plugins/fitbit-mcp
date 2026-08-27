@@ -3,26 +3,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, cast
+from typing import cast
 from urllib.parse import quote
 
 import requests
 
 from agent.control.timer import TimerHandle, TimerStatus
 from agent.plugin_composition import Context, HealthHandle, PluginTimers
+from plugins.wake.contracts import WakeAlertSource, WakeContextSource
 from .sleep_context import FitbitAdapterStore
-
-
-class BoundContentSource(Protocol):
-    def submit(
-        self, batch_id: str, items: Sequence[Mapping[str, object]]
-    ) -> Mapping[str, object]: ...
-
-    def unsettled(self, limit: int = 100) -> tuple[Mapping[str, object], ...]: ...
-
-    def ack(self, settlement_ref: str) -> Mapping[str, object]: ...
 
 
 class FitbitMonitorTransientError(RuntimeError):
@@ -63,14 +54,15 @@ class FitbitMonitorClient:
             raise RuntimeError(f"Fitbit event ACK 后仍在 pending 队列: {event_id}")
 
 
-class FitbitContentRuntime:
-    """结算已投递 ACK，提交一次 monitor 快照，再登记一个 Timer。"""
+class FitbitWakeRuntime:
+    """上报 Fitbit Alert 与 Context，再登记一个 Timer。"""
 
     def __init__(
         self,
         store: FitbitAdapterStore,
         timers: PluginTimers,
-        content: BoundContentSource,
+        alerts: WakeAlertSource,
+        context: WakeContextSource,
         monitor: FitbitMonitorClient,
         *,
         poll_interval: timedelta,
@@ -80,7 +72,8 @@ class FitbitContentRuntime:
     ) -> None:
         self._store = store
         self._timers = timers
-        self._content = content
+        self._alerts = alerts
+        self._context = context
         self._monitor = monitor
         self._poll_interval = poll_interval
         self._sleep_ttl = sleep_ttl
@@ -94,10 +87,10 @@ class FitbitContentRuntime:
         """恢复来源 deadline，并启动唯一 Fiber-owned 采集循环。"""
 
         if self._closed:
-            raise RuntimeError("Fitbit Content runtime 已关闭")
+            raise RuntimeError("Fitbit Wake runtime 已关闭")
         if self._task is None:
             self._task = await ctx.spawn(
-                self._run(ctx, health), name="fitbit-content-poll"
+                self._run(ctx, health), name="fitbit-wake-poll"
             )
 
     async def close(self) -> None:
@@ -143,42 +136,44 @@ class FitbitContentRuntime:
     def tick(self) -> None:
         """先结算历史投递，再发布当前 monitor 快照。"""
 
-        # 1. 先完成外部 ACK，再结算 Content
-        self._drain_unsettled()
-
-        # 2. 只拉取一次，独立归一化健康事件，并优先提交 Content
+        # 1. 只拉取一次；终态 Alert 先 ACK，其余按稳定身份上报。
         snapshot = self._monitor_snapshot()
         items = normalize_health_events(snapshot)
-        batch_id = stable_batch_id(items)
-        _ = self._content.submit(batch_id, items)
-
-        # 3. Content 接受批次后，才推进私有缓存和 deadline
         now = _aware(self._now())
-        sleep = normalize_sleep(snapshot)
-        self._store.commit_snapshot(
-            sleep,
-            observed_at=now,
-            expires_at=now + self._sleep_ttl,
-            next_due=now + self._poll_interval,
-        )
-
-    def _drain_unsettled(self) -> None:
-        while True:
-            rows = self._content.unsettled(limit=100)
-            for row in rows:
-                payload = _mapping(row, "payload")
-                event_id = _string(payload, "upstream_event_id")
-                settlement_ref = _string(row, "settlement_ref")
+        for item in items:
+            event_id = str(item["item_id"])
+            status = self._alerts.status(
+                source_id="fitbit-health-alerts",
+                event_id=event_id,
+            )
+            if status in {"delivered", "skipped"}:
                 self._ensure_not_pending(event_id)
                 if self._after_provider_ack is not None:
                     self._after_provider_ack()
-                settled = self._content.ack(settlement_ref)
-                if settled.get("settled") is not True:
-                    raise RuntimeError(
-                        f"Fitbit Content ACK 未结算: {dict(settled)!r}"
-                    )
-            if len(rows) < 100:
-                return
+                continue
+            _ = self._alerts.report(
+                source_id="fitbit-health-alerts",
+                event_id=event_id,
+                payload=_mapping(item, "payload"),
+                observed_at=now,
+            )
+
+        # 2. 睡眠状态是可覆盖、会过期的 Context，不参与 Content 初筛。
+        sleep = normalize_sleep(snapshot)
+        expires_at = now + self._sleep_ttl
+        _ = self._context.report(
+            source_id="fitbit-sleep",
+            event_id="current",
+            payload=sleep,
+            observed_at=now,
+            expires_at=expires_at,
+        )
+        self._store.commit_snapshot(
+            sleep,
+            observed_at=now,
+            expires_at=expires_at,
+            next_due=now + self._poll_interval,
+        )
 
     def _monitor_snapshot(self) -> Mapping[str, object]:
         try:
@@ -249,19 +244,6 @@ def normalize_sleep(snapshot: Mapping[str, object]) -> Mapping[str, object]:
     }
 
 
-def stable_batch_id(items: Sequence[Mapping[str, object]]) -> str:
-    identity = sorted(
-        (
-            {"item_id": item["item_id"], "revision": item["revision"]}
-            for item in items
-        ),
-        key=lambda item: (str(item["item_id"]), str(item["revision"])),
-    )
-    return "fitbit-monitor:" + hashlib.sha256(
-        _canonical(identity).encode("utf-8")
-    ).hexdigest()
-
-
 def _event_id(value: object) -> str:
     if not isinstance(value, Mapping):
         raise TypeError("Fitbit health event 必须是对象")
@@ -283,10 +265,12 @@ def _string(payload: Mapping[str, object], name: str) -> str:
 
 
 def _canonical(payload: object) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
 
 
 def _aware(value: datetime) -> datetime:
     if value.tzinfo is None:
-        raise ValueError("Fitbit Content clock 必须带时区")
+        raise ValueError("Fitbit Wake clock 必须带时区")
     return value.astimezone(UTC)

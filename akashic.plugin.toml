@@ -1,6 +1,6 @@
 schema_version = 1
 name = "fitbit"
-version = "3.1.0"
+version = "3.2.0"
 api_version = 3
 entrypoint = "plugin.py"
 

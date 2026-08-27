@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
-
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent.lifecycle.composition import CONTEXT_PREPARED_EVENT
 from agent.plugin_composition import (
     MANAGED_PROCESSES,
     MCP_SERVERS,
@@ -19,22 +16,17 @@ from agent.plugin_composition import (
     McpServerDefinition,
     MobileUiDefinition,
     MobileUiNavigation,
-    ServiceKey,
+)
+from plugins.wake.contracts import (
+    WAKE_ALERT_SOURCE,
+    WAKE_CONTEXT_SOURCE,
 )
 from .src.content_adapter import (
-    BoundContentSource,
-    FitbitContentRuntime,
+    FitbitWakeRuntime,
     FitbitMonitorClient,
 )
 from .src.mobile_reader import mobile_ui_query
-from .src.sleep_context import FitbitAdapterStore, SleepContextAppender
-
-
-class ContentSourceServices(Protocol):
-    def bind(self, source_id: str) -> BoundContentSource: ...
-
-
-CONTENT_SOURCE = ServiceKey[ContentSourceServices]("content.source.v1")
+from .src.sleep_context import FitbitAdapterStore
 
 
 class FitbitContentConfig(BaseModel):
@@ -52,15 +44,22 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.1.0"
-desc = "Fitbit health monitor, Content source, and sleep context"
+version = "3.2.0"
+desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
-inject = (MANAGED_PROCESSES, MCP_SERVERS, TIMERS, CONTENT_SOURCE, UI_SLOTS)
+inject = (
+    MANAGED_PROCESSES,
+    MCP_SERVERS,
+    TIMERS,
+    WAKE_ALERT_SOURCE,
+    WAKE_CONTEXT_SOURCE,
+    UI_SLOTS,
+)
 dashboard_module = "dashboard.py"
 
 
 async def apply(ctx: Context, config: FitbitConfig) -> None:
-    """装配 monitor、工具、Content 采集、睡眠上下文与移动界面。"""
+    """装配 monitor、工具、Wake 来源和移动界面。"""
 
     # 1. 登记现有 monitor 与用户显式调用的普通 MCP 工具
     await ctx.require(MANAGED_PROCESSES).register(
@@ -93,10 +92,11 @@ async def apply(ctx: Context, config: FitbitConfig) -> None:
     # 2. 绑定唯一正式来源；candidate Root 不会收到 STARTED
     store = FitbitAdapterStore(ctx.data_root / "adapter.sqlite3")
     store.initialize(datetime.now(UTC))
-    runtime = FitbitContentRuntime(
+    runtime = FitbitWakeRuntime(
         store,
         ctx.require(TIMERS),
-        ctx.require(CONTENT_SOURCE).bind("fitbit-health-alerts"),
+        ctx.require(WAKE_ALERT_SOURCE),
+        ctx.require(WAKE_CONTEXT_SOURCE),
         FitbitMonitorClient(),
         poll_interval=timedelta(seconds=config.content.poll_interval_seconds),
         sleep_ttl=timedelta(seconds=config.content.sleep_ttl_seconds),
@@ -105,8 +105,8 @@ async def apply(ctx: Context, config: FitbitConfig) -> None:
     def setup() -> object:
         return runtime.close
 
-    _ = await ctx.effect(setup, label="fitbit-content-runtime")
-    poll_health = await ctx.health("fitbit-content-poll")
+    _ = await ctx.effect(setup, label="fitbit-wake-runtime")
+    poll_health = await ctx.health("fitbit-wake-poll")
 
     async def start(_event: object) -> None:
         await runtime.start(ctx, poll_health)
@@ -116,7 +116,6 @@ async def apply(ctx: Context, config: FitbitConfig) -> None:
 
     _ = await ctx.on(RUNTIME_STARTED, start)
     _ = await ctx.on(RUNTIME_STOPPING, stop)
-    _ = await ctx.on(CONTEXT_PREPARED_EVENT, SleepContextAppender(store).prepare)
 
     # 3. 在同一个 exact Root 上保留现有移动投影
     await ctx.require(UI_SLOTS).register_mobile(
