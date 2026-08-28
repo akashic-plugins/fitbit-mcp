@@ -10,9 +10,14 @@ from urllib.parse import quote
 
 import requests
 
-from agent.control.timer import TimerHandle, TimerStatus
-from agent.plugin_composition import Context, HealthHandle, PluginTimers
-from plugins.wake.contracts import WakeAlertSource, WakeContextSource
+from agent.plugin_composition import (
+    Context,
+    HealthHandle,
+    PluginTimers,
+    TimerHandle,
+    TimerStatus,
+)
+from .eventmail import BoundAlertSource, BoundContextSource
 from .sleep_context import FitbitAdapterStore
 
 
@@ -61,8 +66,8 @@ class FitbitWakeRuntime:
         self,
         store: FitbitAdapterStore,
         timers: PluginTimers,
-        alerts: WakeAlertSource,
-        context: WakeContextSource,
+        alerts: BoundAlertSource,
+        context: BoundContextSource,
         monitor: FitbitMonitorClient,
         *,
         poll_interval: timedelta,
@@ -143,16 +148,14 @@ class FitbitWakeRuntime:
         for item in items:
             event_id = str(item["item_id"])
             status = self._alerts.status(
-                source_id="fitbit-health-alerts",
                 event_id=event_id,
             )
-            if status in {"delivered", "skipped"}:
+            if status in {"delivered", "skipped", "expired"}:
                 self._ensure_not_pending(event_id)
                 if self._after_provider_ack is not None:
                     self._after_provider_ack()
                 continue
             _ = self._alerts.report(
-                source_id="fitbit-health-alerts",
                 event_id=event_id,
                 payload=_mapping(item, "payload"),
                 observed_at=now,
@@ -162,7 +165,6 @@ class FitbitWakeRuntime:
         sleep = normalize_sleep(snapshot)
         expires_at = now + self._sleep_ttl
         _ = self._context.report(
-            source_id="fitbit-sleep",
             event_id="current",
             payload=sleep,
             observed_at=now,

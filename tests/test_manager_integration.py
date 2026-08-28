@@ -6,12 +6,11 @@ import shutil
 from pathlib import Path
 
 import pytest
-from agent.plugin_composition import TIMERS
 from agent.plugins.generation import PluginGeneration
 from agent.plugins.manager import PluginManager
 from agent.plugins.snapshot import RuntimeSnapshot
 from bus.event_bus import EventBus
-from plugins.content import plugin as content_plugin
+from plugins.eventmail import plugin as content_plugin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,7 +130,7 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         for relative in ("plugin.py", "akashic.plugin.toml"):
             path = plugin_root / relative
             path.write_text(
-                path.read_text(encoding="utf-8").replace("3.1.0", "3.1.1"),
+                path.read_text(encoding="utf-8").replace("3.2.1", "3.2.2"),
                 encoding="utf-8",
             )
         candidate = await manager.prepare_candidate("fitbit")
@@ -140,7 +139,7 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         validation_root = candidate.validation_workspace.parent
         candidate_snapshot = candidate.runtime_snapshot
         assert candidate_snapshot.composition_root is not None
-        assert candidate_snapshot.composition_root.context.require(TIMERS).formal is False
+        assert candidate_snapshot.composition_root.receipt().optional_pending == ()
         assert candidate.validation_workspace != tmp_path / "workspace"
         assert _tree_digest(formal_data) == formal_digest
         original_invariants = manager._post_publish_invariants  # pyright: ignore[reportPrivateUsage]

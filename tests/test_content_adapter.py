@@ -10,7 +10,10 @@ import pytest
 
 from agent.control.timer import AsyncioOneShotTimer
 from agent.plugin_composition import CompositionRoot, PluginTimers
-from plugins.wake.contracts import WakeAlertSource, WakeContextSource
+from fitbit_test_plugin.src.eventmail import (  # pyright: ignore[reportMissingImports]
+    BoundAlertSource,
+    BoundContextSource,
+)
 from src.content_adapter import (
     FitbitMonitorClient,
     FitbitWakeRuntime,
@@ -63,8 +66,7 @@ class RecordingAlerts:
         self.reports.append(dict(kwargs))
         return {"accepted": True}
 
-    def status(self, *, source_id: str, event_id: str) -> str | None:
-        assert source_id == "fitbit-health-alerts"
+    def status(self, *, event_id: str) -> str | None:
         return self.statuses.get(event_id)
 
 
@@ -89,8 +91,8 @@ def _runtime(
         FitbitWakeRuntime(
             store,
             PluginTimers.candidate_validation(),
-            cast(WakeAlertSource, alerts),
-            cast(WakeContextSource, context),
+            cast(BoundAlertSource, alerts),
+            cast(BoundContextSource, context),
             cast(FitbitMonitorClient, monitor),
             poll_interval=timedelta(minutes=5),
             sleep_ttl=timedelta(minutes=10),
@@ -112,8 +114,7 @@ def test_health_reports_alert_and_sleep_reports_expiring_context(
     assert alerts.reports[0]["event_id"] == "fitbit:event-1"
     assert context.reports == [
         {
-            "source_id": "fitbit-sleep",
-            "event_id": "current",
+                "event_id": "current",
             "payload": store.current_sleep(NOW),
             "observed_at": NOW,
             "expires_at": NOW + timedelta(minutes=10),
@@ -122,7 +123,7 @@ def test_health_reports_alert_and_sleep_reports_expiring_context(
     assert store.next_due() == NOW + timedelta(minutes=5)
 
 
-@pytest.mark.parametrize("status", ["delivered", "skipped"])
+@pytest.mark.parametrize("status", ["delivered", "skipped", "expired"])
 def test_terminal_alert_is_acknowledged_instead_of_reported(
     tmp_path: Path, status: str
 ) -> None:
@@ -212,8 +213,8 @@ async def test_transient_monitor_error_rearms_and_recovers(tmp_path: Path) -> No
     runtime = FitbitWakeRuntime(
         store,
         PluginTimers(AsyncioOneShotTimer(clock=lambda: NOW, sleeper=sleeper)),
-        cast(WakeAlertSource, alerts),
-        cast(WakeContextSource, context),
+        cast(BoundAlertSource, alerts),
+        cast(BoundContextSource, context),
         cast(FitbitMonitorClient, monitor),
         poll_interval=timedelta(minutes=5),
         sleep_ttl=timedelta(minutes=10),

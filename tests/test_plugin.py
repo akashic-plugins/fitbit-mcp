@@ -25,10 +25,12 @@ from agent.plugin_composition.process_slots import (
 from agent.plugins import manager as manager_module
 from agent.plugins.composable import ComposablePlugin
 from agent.plugins.static_manifest import load_static_plugin_manifest
-from plugins.wake.contracts import WAKE_ALERT_SOURCE, WAKE_CONTEXT_SOURCE
-
 from fitbit_test_plugin import plugin as plugin_module  # pyright: ignore[reportMissingImports]
 from fitbit_test_plugin.plugin import FitbitConfig  # pyright: ignore[reportMissingImports]
+from fitbit_test_plugin.src.eventmail import (  # pyright: ignore[reportMissingImports]
+    EVENTMAIL_ALERT_SOURCE,
+    EVENTMAIL_CONTEXT_SOURCE,
+)
 from src import mobile_reader
 from src.mobile_reader import mobile_ui_query
 
@@ -37,15 +39,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
+    class Sources:
+        def bind(self, source_id: str) -> object:
+            return object()
+
     await root.context.provide(TIMERS, PluginTimers.candidate_validation())
-    _ = await root.context.provide(WAKE_ALERT_SOURCE, object())
-    _ = await root.context.provide(WAKE_CONTEXT_SOURCE, object())
+    _ = await root.context.provide(EVENTMAIL_ALERT_SOURCE, Sources())
+    _ = await root.context.provide(EVENTMAIL_CONTEXT_SOURCE, Sources())
 
 
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.2.0"
+    assert plugin_module.version == "3.2.1"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx", "config")
     assert (
         ComposablePlugin.from_module(plugin_module).dashboard_module == "dashboard.py"
@@ -98,10 +104,39 @@ async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
     await root.dispose()
 
 
+@pytest.mark.asyncio
+async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path) -> None:
+    root = CompositionRoot("fitbit:without-eventmail")
+    processes = PluginManagedProcesses(root.instance_token)
+    servers = PluginMcpServers(root.instance_token)
+    ui_slots = PluginUiSlots()
+    await root.context.provide(MANAGED_PROCESSES, processes)
+    await root.context.provide(MCP_SERVERS, servers)
+    await root.context.provide(TIMERS, PluginTimers.candidate_validation())
+    await root.context.provide(UI_SLOTS, ui_slots)
+    await root.mount(
+        ComposablePlugin.from_module(plugin_module),
+        name="fitbit",
+        runtime=PluginRuntime(
+            plugin_id="fitbit",
+            generation_id="fitbit:without-eventmail",
+            plugin_dir=ROOT,
+            data_dir=tmp_path / "plugin-data",
+            workspace=tmp_path / "workspace",
+            config=FitbitConfig(),
+        ),
+    )
+
+    assert "fitbit" in _freeze_plugin_mcp_servers(servers, root.instance_token)
+    assert "fitbit" in ui_slots.freeze()
+    assert not (tmp_path / "plugin-data/adapter.sqlite3").exists()
+    await root.dispose()
+
+
 def test_static_manifest_freezes_runtime_and_candidate_exclusions() -> None:
     manifest = load_static_plugin_manifest(ROOT)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.2.0"
+    assert manifest.version == "3.2.1"
     assert manifest.requirements == ("requirements.txt",)
     assert len(manifest.managed_processes) == 1
     assert manifest.managed_processes[0].formal_port == 18765

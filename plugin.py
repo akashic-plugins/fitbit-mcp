@@ -17,14 +17,11 @@ from agent.plugin_composition import (
     MobileUiDefinition,
     MobileUiNavigation,
 )
-from plugins.wake.contracts import (
-    WAKE_ALERT_SOURCE,
-    WAKE_CONTEXT_SOURCE,
-)
 from .src.content_adapter import (
     FitbitWakeRuntime,
     FitbitMonitorClient,
 )
+from .src.eventmail import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
 from .src.mobile_reader import mobile_ui_query
 from .src.sleep_context import FitbitAdapterStore
 
@@ -44,15 +41,13 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.2.0"
+version = "3.2.1"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
     MANAGED_PROCESSES,
     MCP_SERVERS,
     TIMERS,
-    WAKE_ALERT_SOURCE,
-    WAKE_CONTEXT_SOURCE,
     UI_SLOTS,
 )
 dashboard_module = "dashboard.py"
@@ -89,33 +84,40 @@ async def apply(ctx: Context, config: FitbitConfig) -> None:
         ),
     )
 
-    # 2. 绑定唯一正式来源；candidate Root 不会收到 STARTED
-    store = FitbitAdapterStore(ctx.data_root / "adapter.sqlite3")
-    store.initialize(datetime.now(UTC))
-    runtime = FitbitWakeRuntime(
-        store,
-        ctx.require(TIMERS),
-        ctx.require(WAKE_ALERT_SOURCE),
-        ctx.require(WAKE_CONTEXT_SOURCE),
-        FitbitMonitorClient(),
-        poll_interval=timedelta(seconds=config.content.poll_interval_seconds),
-        sleep_ttl=timedelta(seconds=config.content.sleep_ttl_seconds),
+    # 2. EventMail 存在时，独立子 Fiber 才启动健康来源。
+    async def apply_eventmail(source_ctx: Context) -> None:
+        store = FitbitAdapterStore(source_ctx.data_root / "adapter.sqlite3")
+        store.initialize(datetime.now(UTC))
+        runtime = FitbitWakeRuntime(
+            store,
+            source_ctx.require(TIMERS),
+            source_ctx.require(EVENTMAIL_ALERT_SOURCE).bind("fitbit-health-alerts"),
+            source_ctx.require(EVENTMAIL_CONTEXT_SOURCE).bind("fitbit-sleep"),
+            FitbitMonitorClient(),
+            poll_interval=timedelta(seconds=config.content.poll_interval_seconds),
+            sleep_ttl=timedelta(seconds=config.content.sleep_ttl_seconds),
+        )
+
+        def setup() -> object:
+            return runtime.close
+
+        _ = await source_ctx.effect(setup, label="fitbit-eventmail-runtime")
+        poll_health = await source_ctx.health("fitbit-eventmail-poll")
+
+        async def start(_event: object) -> None:
+            await runtime.start(source_ctx, poll_health)
+
+        async def stop(_event: object) -> None:
+            await runtime.close()
+
+        _ = await source_ctx.on(RUNTIME_STARTED, start)
+        _ = await source_ctx.on(RUNTIME_STOPPING, stop)
+
+    _ = await ctx.inject(
+        (TIMERS, EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE),
+        apply_eventmail,
+        name="fitbit-eventmail-source",
     )
-
-    def setup() -> object:
-        return runtime.close
-
-    _ = await ctx.effect(setup, label="fitbit-wake-runtime")
-    poll_health = await ctx.health("fitbit-wake-poll")
-
-    async def start(_event: object) -> None:
-        await runtime.start(ctx, poll_health)
-
-    async def stop(_event: object) -> None:
-        await runtime.close()
-
-    _ = await ctx.on(RUNTIME_STARTED, start)
-    _ = await ctx.on(RUNTIME_STOPPING, stop)
 
     # 3. 在同一个 exact Root 上保留现有移动投影
     await ctx.require(UI_SLOTS).register_mobile(
