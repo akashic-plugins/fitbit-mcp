@@ -8,9 +8,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from agent.lifecycle.types import BeforeTurnCtx
-
-
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_state(
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -112,35 +109,6 @@ class FitbitAdapterStore:
             raise
         finally:
             connection.close()
-
-
-class SleepContextAppender:
-    """只为 Wake Turn 追加未过期的 Fitbit 睡眠提示。"""
-
-    def __init__(self, store: FitbitAdapterStore) -> None:
-        self._store = store
-
-    async def prepare(self, ctx: BeforeTurnCtx) -> None:
-        if ctx.channel != "wake":
-            return
-        sleep = self._store.current_sleep(ctx.timestamp)
-        if sleep is None:
-            return
-        state = _string(sleep, "state")
-        probability = sleep.get("prob")
-        lag = sleep.get("data_lag_min")
-        ctx.extra_hints.append(
-            "Fitbit 睡眠上下文（概率判断，不是事实）："
-            f"state={state}, probability={probability}, data_lag_min={lag}。"
-            "若可能正在睡觉，普通内容应克制打扰；明显高兴趣或高相关内容仍可发送。"
-        )
-
-
-def _string(payload: Mapping[str, object], name: str) -> str:
-    value = payload.get(name)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"Fitbit sleep {name} 必须是非空字符串")
-    return value
 
 
 def _aware(value: datetime) -> datetime:
