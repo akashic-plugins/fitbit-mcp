@@ -1,4 +1,13 @@
-const api = window.api;
+export function activate(ctx) {
+  return ctx.ui.inject("workbench.panels.v1", (mount) => mount.register({
+    id: "fitbit",
+    label: "Fitbit 健康",
+    order: 40,
+    render(host) {
+      return renderFitbitDashboard(host, ctx);
+    },
+  }));
+}
 
 function number(value, digits = 0) {
   if (value === null || value === undefined) return "—";
@@ -214,8 +223,7 @@ function showError(root, error) {
   errorNode.querySelector("span").textContent = error instanceof Error ? error.message : "Fitbit 数据读取失败";
 }
 
-function renderFitbitDashboard(container) {
-  container.__fitbitDashboardDispose?.();
+function renderFitbitDashboard(container, ctx) {
   container.innerHTML = `
     <main class="fitbit-dashboard" aria-labelledby="fitbit-dashboard-title">
       <header class="fitbit-dashboard__header">
@@ -225,7 +233,7 @@ function renderFitbitDashboard(container) {
         </div>
         <div class="fitbit-dashboard__actions">
           <span class="fitbit-dashboard__sync" data-fitbit-status><i></i><span data-fitbit-updated>正在连接</span></span>
-          <a class="fitbit-dashboard__button is-tonal" href="/api/dashboard/fitbit/auth/start" target="_blank" rel="noreferrer">连接 Fitbit</a>
+          <button class="fitbit-dashboard__button is-tonal" type="button" data-fitbit-auth>连接 Fitbit</button>
           <button class="fitbit-dashboard__button" type="button" data-fitbit-refresh>刷新</button>
         </div>
       </header>
@@ -318,70 +326,142 @@ function renderFitbitDashboard(container) {
 
   let disposed = false;
   let timer;
+  let refreshTimer = null;
   let inFlight = null;
+  let loadRequest = null;
+  let pendingAuthorizationWindow = null;
   let lastLoadedAt = 0;
+  const requests = new Set();
   const refreshIntervalMs = 60_000;
-  const load = () => {
-    if (inFlight) return inFlight;
-    inFlight = api("/api/dashboard/fitbit/overview")
+  const refreshButton = container.querySelector("[data-fitbit-refresh]");
+  const retryButton = container.querySelector("[data-fitbit-retry]");
+  const authButton = container.querySelector("[data-fitbit-auth]");
+  const request = (path, init = {}, controller = new AbortController()) => {
+    requests.add(controller);
+    return requestJson(ctx, path, init, controller)
+      .finally(() => requests.delete(controller));
+  };
+  const load = (force = false) => {
+    if (inFlight && !force) return inFlight;
+    if (force) loadRequest?.abort();
+    const controller = new AbortController();
+    loadRequest = controller;
+    const pending = request("/api/dashboard/fitbit/overview", {}, controller)
       .then((payload) => {
-        if (!disposed) {
+        if (!disposed && loadRequest === controller && !controller.signal.aborted) {
           renderOverview(container, payload);
           lastLoadedAt = Date.now();
         }
       })
       .catch((error) => {
-        if (!disposed) showError(container, error);
+        if (!disposed && loadRequest === controller && !controller.signal.aborted) {
+          showError(container, error);
+        }
       })
       .finally(() => {
-        inFlight = null;
+        if (loadRequest === controller) {
+          loadRequest = null;
+          inFlight = null;
+        }
       });
-    return inFlight;
+    inFlight = pending;
+    return pending;
   };
   const refresh = async () => {
-    const button = container.querySelector("[data-fitbit-refresh]");
-    button.disabled = true;
-    button.textContent = "刷新中";
+    refreshButton.disabled = true;
+    refreshButton.textContent = "刷新中";
     try {
-      await api("/api/dashboard/fitbit/refresh", { method: "POST" });
-      window.setTimeout(() => void load(), 900);
+      await request("/api/dashboard/fitbit/refresh", { method: "POST" });
+      if (!disposed) {
+        refreshTimer = window.setTimeout(() => {
+          refreshTimer = null;
+          void load(true);
+        }, 900);
+      }
     } catch (error) {
-      showError(container, error);
+      if (!disposed) showError(container, error);
     } finally {
-      button.disabled = false;
-      button.textContent = "刷新";
+      if (!disposed) {
+        refreshButton.disabled = false;
+        refreshButton.textContent = "刷新";
+      }
     }
   };
-  container.querySelector("[data-fitbit-refresh]").addEventListener("click", refresh);
-  container.querySelector("[data-fitbit-retry]").addEventListener("click", load);
+  const startAuthorization = async () => {
+    if (typeof window.open !== "function") {
+      showError(container, new Error("此浏览器无法打开 Fitbit 授权窗口"));
+      return;
+    }
+    const authorizationWindow = window.open("about:blank", "_blank");
+    if (authorizationWindow === null) {
+      showError(container, new Error("浏览器阻止了 Fitbit 授权窗口"));
+      return;
+    }
+    pendingAuthorizationWindow = authorizationWindow;
+    authorizationWindow.opener = null;
+    authButton.disabled = true;
+    authButton.textContent = "正在打开";
+    try {
+      const payload = await request("/api/dashboard/fitbit/auth/start");
+      if (disposed) {
+        authorizationWindow.close();
+        return;
+      }
+      if (!payload || typeof payload.url !== "string") {
+        throw new Error("Fitbit 授权地址无效");
+      }
+      authorizationWindow.location.replace(payload.url);
+      // Navigation commits the popup to the user-owned OAuth flow.
+      if (pendingAuthorizationWindow === authorizationWindow) pendingAuthorizationWindow = null;
+    } catch (error) {
+      authorizationWindow.close();
+      if (pendingAuthorizationWindow === authorizationWindow) pendingAuthorizationWindow = null;
+      if (!disposed) showError(container, error);
+    } finally {
+      if (!disposed) {
+        authButton.disabled = false;
+        authButton.textContent = "连接 Fitbit";
+      }
+    }
+  };
   const onFocus = () => {
     if (Date.now() - lastLoadedAt >= refreshIntervalMs) void load();
   };
+  refreshButton.addEventListener("click", refresh);
+  retryButton.addEventListener("click", load);
+  authButton.addEventListener("click", startAuthorization);
   window.addEventListener("focus", onFocus);
-  timer = window.setInterval(load, refreshIntervalMs);
-  container.__fitbitDashboardDispose = () => {
+  timer = window.setInterval(() => void load(), refreshIntervalMs);
+  void load();
+  return () => {
     disposed = true;
     window.clearInterval(timer);
+    if (refreshTimer !== null) window.clearTimeout(refreshTimer);
     window.removeEventListener("focus", onFocus);
+    refreshButton.removeEventListener("click", refresh);
+    retryButton.removeEventListener("click", load);
+    authButton.removeEventListener("click", startAuthorization);
+    for (const controller of requests) controller.abort();
+    requests.clear();
+    pendingAuthorizationWindow?.close();
+    pendingAuthorizationWindow = null;
+    container.replaceChildren();
   };
-  void load();
 }
 
-window.AkashicDashboard.registerPlugin({
-  id: "fitbit_health",
-  label: "Fitbit 健康",
-  viewLabel: "Fitbit 健康",
-  layout: "workbench",
-  pageSize: 1,
-  rowKey: "id",
-  columns: [{ key: "id", label: "Fitbit", flex: true }],
-  getCount() {
-    return 1;
-  },
-  async fetchPage() {
-    return { items: [], total: 0 };
-  },
-  renderMain(container) {
-    renderFitbitDashboard(container);
-  },
-});
+async function requestJson(client, path, init, controller) {
+  const response = await client.http.request(path, { ...init, signal: controller.signal });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    // HTTP status remains the authoritative failure when the body is unavailable.
+  }
+  if (!response.ok) {
+    const detail = payload && typeof payload === "object"
+      ? payload.detail || payload.message
+      : null;
+    throw new Error(typeof detail === "string" ? detail : `HTTP ${response.status}`);
+  }
+  return payload;
+}

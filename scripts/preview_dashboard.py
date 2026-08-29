@@ -34,8 +34,8 @@ def run_preview(agent_root: Path, plugin_root: Path, host: str, port: int) -> No
     plugin_root = plugin_root.resolve(strict=True)
     if not (agent_root / "bootstrap" / "dashboard_api.py").is_file():
         raise FileNotFoundError(f"Akashic Agent Dashboard 不存在: {agent_root}")
-    if not (plugin_root / "dashboard_panel.js").is_file():
-        raise FileNotFoundError(f"Fitbit Dashboard 面板不存在: {plugin_root}")
+    if not (plugin_root / "web_module.js").is_file():
+        raise FileNotFoundError(f"Fitbit Workbench 面板不存在: {plugin_root}")
 
     # 2. Project the plugin into an isolated HOME and reuse the real Dashboard host.
     with tempfile.TemporaryDirectory(prefix="fitbit-dashboard-preview-") as temp:

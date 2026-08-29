@@ -1,3 +1,4 @@
+/* Workbench panel styles are scoped to the Fitbit root. */
 .fitbit-dashboard {
   --fitbit-primary: oklch(0.74 0.1 270);
   --fitbit-on-primary: oklch(0.18 0.025 270);
@@ -134,8 +135,10 @@
   background: var(--fitbit-primary-container);
 }
 
-.fitbit-dashboard__button:hover {
-  filter: brightness(1.06);
+@media (hover: hover) {
+  .fitbit-dashboard__button:hover {
+    filter: brightness(1.06);
+  }
 }
 
 .fitbit-dashboard__button:active {
