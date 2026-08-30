@@ -1,15 +1,15 @@
 .fitbit-dashboard {
-  --fitbit-primary: oklch(0.74 0.1 270);
-  --fitbit-on-primary: oklch(0.18 0.025 270);
-  --fitbit-primary-container: oklch(0.28 0.035 270);
-  --fitbit-on-primary-container: oklch(0.92 0.025 270);
-  --fitbit-heart-container: oklch(0.27 0.025 18);
-  --fitbit-heart-ink: oklch(0.88 0.045 18);
-  --fitbit-oxygen-container: oklch(0.27 0.025 220);
-  --fitbit-oxygen-ink: oklch(0.88 0.04 220);
-  --fitbit-steps-container: oklch(0.27 0.025 165);
-  --fitbit-steps-ink: oklch(0.88 0.04 165);
-  --fitbit-awake-ink: oklch(0.78 0.02 250);
+  --fitbit-primary: light-dark(oklch(0.53 0.135 270), oklch(0.74 0.1 270));
+  --fitbit-on-primary: light-dark(oklch(0.98 0.006 270), oklch(0.18 0.025 270));
+  --fitbit-primary-container: light-dark(oklch(0.92 0.035 270), oklch(0.28 0.035 270));
+  --fitbit-on-primary-container: light-dark(oklch(0.29 0.055 270), oklch(0.92 0.025 270));
+  --fitbit-heart-container: light-dark(oklch(0.94 0.025 18), oklch(0.27 0.025 18));
+  --fitbit-heart-ink: light-dark(oklch(0.34 0.06 18), oklch(0.88 0.045 18));
+  --fitbit-oxygen-container: light-dark(oklch(0.94 0.025 220), oklch(0.27 0.025 220));
+  --fitbit-oxygen-ink: light-dark(oklch(0.32 0.055 220), oklch(0.88 0.04 220));
+  --fitbit-steps-container: light-dark(oklch(0.94 0.025 165), oklch(0.27 0.025 165));
+  --fitbit-steps-ink: light-dark(oklch(0.31 0.055 165), oklch(0.88 0.04 165));
+  --fitbit-awake-ink: light-dark(oklch(0.42 0.025 250), oklch(0.78 0.02 250));
   --fitbit-surface: var(--ak-color-bg-canvas);
   --fitbit-surface-low: var(--ak-color-bg-surface-low);
   --fitbit-surface-container: var(--ak-color-bg-surface);
@@ -22,25 +22,10 @@
   margin-inline: auto;
   padding: clamp(20px, 3vw, 40px);
   color: var(--fitbit-on-surface);
-  font-family: var(--sans);
+  font-family: var(--ak-type-reading);
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-:root[data-theme="light"] .fitbit-dashboard,
-:root[data-theme="warm-paper"] .fitbit-dashboard {
-  --fitbit-primary: oklch(0.53 0.135 270);
-  --fitbit-on-primary: oklch(0.98 0.006 270);
-  --fitbit-primary-container: oklch(0.92 0.035 270);
-  --fitbit-on-primary-container: oklch(0.29 0.055 270);
-  --fitbit-heart-container: oklch(0.94 0.025 18);
-  --fitbit-heart-ink: oklch(0.34 0.06 18);
-  --fitbit-oxygen-container: oklch(0.94 0.025 220);
-  --fitbit-oxygen-ink: oklch(0.32 0.055 220);
-  --fitbit-steps-container: oklch(0.94 0.025 165);
-  --fitbit-steps-ink: oklch(0.31 0.055 165);
-  --fitbit-awake-ink: oklch(0.42 0.025 250);
 }
 
 .fitbit-dashboard [hidden] {

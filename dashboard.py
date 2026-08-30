@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
 
 from agent.plugin_composition import DashboardContext
 
@@ -32,8 +32,8 @@ def register(app: FastAPI, context: DashboardContext) -> None:
         return {"status": "refreshing"}
 
     @app.get("/api/dashboard/fitbit/auth/start")
-    def auth_start() -> RedirectResponse:
-        return RedirectResponse(f"{_MONITOR_URL}/auth/start")
+    def auth_start() -> dict[str, str]:
+        return {"url": _monitor_authorization_url()}
 
 
 def _monitor_json(path: str) -> Mapping[str, object]:
@@ -54,6 +54,32 @@ def _monitor_payload(path: str) -> object:
     except requests.exceptions.JSONDecodeError as error:
         raise HTTPException(status_code=502, detail=f"Fitbit monitor 返回无效 JSON: {path}") from error
     return payload
+
+
+def _monitor_authorization_url() -> str:
+    """Read the monitor-generated Fitbit authorization redirect as a DTO."""
+
+    try:
+        response = requests.get(
+            f"{_MONITOR_URL}/auth/start",
+            timeout=8,
+            allow_redirects=False,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail="Fitbit monitor 不可用: /auth/start") from error
+
+    authorization_url = response.headers.get("location")
+    parsed = urlsplit(authorization_url or "")
+    if (
+        not response.is_redirect
+        or not isinstance(authorization_url, str)
+        or parsed.scheme != "https"
+        or parsed.netloc != "www.fitbit.com"
+        or parsed.path != "/oauth2/authorize"
+    ):
+        raise HTTPException(status_code=502, detail="Fitbit monitor 返回无效授权地址")
+    return authorization_url
 
 
 def _project_dashboard_snapshot(payload: Mapping[str, object]) -> dict[str, object]:

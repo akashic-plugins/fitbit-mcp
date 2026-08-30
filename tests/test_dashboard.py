@@ -125,6 +125,28 @@ def test_registered_overview_reads_one_compact_monitor_snapshot(
     assert calls == ["/api/dashboard/snapshot"]
 
 
+def test_monitor_authorization_redirect_becomes_a_plugin_owned_dto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authorization_url = "https://www.fitbit.com/oauth2/authorize?client_id=fitbit"
+    calls: list[tuple[str, int, bool]] = []
+
+    class Response:
+        is_redirect = True
+        headers = {"location": authorization_url}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def get(url: str, *, timeout: int, allow_redirects: bool) -> Response:
+        calls.append((url, timeout, allow_redirects))
+        return Response()
+
+    monkeypatch.setattr(dashboard.requests, "get", get)
+    assert dashboard._monitor_authorization_url() == authorization_url
+    assert calls == [("http://127.0.0.1:18765/auth/start", 8, False)]
+
+
 def test_compact_snapshot_boundary_rejects_missing_prediction_events() -> None:
     with pytest.raises(HTTPException, match="prediction_events 必须是数组"):
         dashboard._project_dashboard_snapshot(

@@ -1,4 +1,12 @@
-const api = window.api;
+let dashboardRequest = null;
+
+async function api(path, init) {
+  if (!dashboardRequest) throw new Error("Fitbit 工作台面板未激活");
+  const response = await dashboardRequest(path, init);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body?.detail || body?.message || `HTTP ${response.status}`);
+  return body;
+}
 
 function number(value, digits = 0) {
   if (value === null || value === undefined) return "—";
@@ -215,7 +223,6 @@ function showError(root, error) {
 }
 
 function renderFitbitDashboard(container) {
-  container.__fitbitDashboardDispose?.();
   container.innerHTML = `
     <main class="fitbit-dashboard" aria-labelledby="fitbit-dashboard-title">
       <header class="fitbit-dashboard__header">
@@ -225,7 +232,7 @@ function renderFitbitDashboard(container) {
         </div>
         <div class="fitbit-dashboard__actions">
           <span class="fitbit-dashboard__sync" data-fitbit-status><i></i><span data-fitbit-updated>正在连接</span></span>
-          <a class="fitbit-dashboard__button is-tonal" href="/api/dashboard/fitbit/auth/start" target="_blank" rel="noreferrer">连接 Fitbit</a>
+          <button class="fitbit-dashboard__button is-tonal" type="button" data-fitbit-auth>连接 Fitbit</button>
           <button class="fitbit-dashboard__button" type="button" data-fitbit-refresh>刷新</button>
         </div>
       </header>
@@ -318,12 +325,18 @@ function renderFitbitDashboard(container) {
 
   let disposed = false;
   let timer;
+  let refreshTimer;
   let inFlight = null;
+  let readController = null;
+  let authorizationWindow = null;
   let lastLoadedAt = 0;
   const refreshIntervalMs = 60_000;
-  const load = () => {
-    if (inFlight) return inFlight;
-    inFlight = api("/api/dashboard/fitbit/overview")
+  const load = (replace = false) => {
+    if (inFlight && !replace) return inFlight;
+    if (replace) readController?.abort();
+    const controller = new AbortController();
+    readController = controller;
+    const work = api("/api/dashboard/fitbit/overview", { signal: controller.signal })
       .then((payload) => {
         if (!disposed) {
           renderOverview(container, payload);
@@ -331,12 +344,14 @@ function renderFitbitDashboard(container) {
         }
       })
       .catch((error) => {
-        if (!disposed) showError(container, error);
+        if (!disposed && error?.name !== "AbortError") showError(container, error);
       })
       .finally(() => {
-        inFlight = null;
+        if (inFlight === work) inFlight = null;
+        if (readController === controller) readController = null;
       });
-    return inFlight;
+    inFlight = work;
+    return work;
   };
   const refresh = async () => {
     const button = container.querySelector("[data-fitbit-refresh]");
@@ -344,7 +359,10 @@ function renderFitbitDashboard(container) {
     button.textContent = "刷新中";
     try {
       await api("/api/dashboard/fitbit/refresh", { method: "POST" });
-      window.setTimeout(() => void load(), 900);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined;
+        void load(true);
+      }, 900);
     } catch (error) {
       showError(container, error);
     } finally {
@@ -352,36 +370,85 @@ function renderFitbitDashboard(container) {
       button.textContent = "刷新";
     }
   };
+  const authorize = async () => {
+    const button = container.querySelector("[data-fitbit-auth]");
+    const popup = window.open("about:blank", "_blank");
+    if (!popup) {
+      showError(container, new Error("浏览器阻止了 Fitbit 授权窗口"));
+      return;
+    }
+    popup.opener = null;
+    authorizationWindow = popup;
+    button.disabled = true;
+    try {
+      const payload = await api("/api/dashboard/fitbit/auth/start");
+      const url = fitbitAuthorizationUrl(payload);
+      if (disposed || authorizationWindow !== popup) {
+        popup.close();
+        return;
+      }
+      popup.location.replace(url);
+      authorizationWindow = null;
+    } catch (error) {
+      popup.close();
+      if (!disposed) showError(container, error);
+    } finally {
+      if (!disposed) button.disabled = false;
+    }
+  };
   container.querySelector("[data-fitbit-refresh]").addEventListener("click", refresh);
   container.querySelector("[data-fitbit-retry]").addEventListener("click", load);
+  container.querySelector("[data-fitbit-auth]").addEventListener("click", authorize);
   const onFocus = () => {
     if (Date.now() - lastLoadedAt >= refreshIntervalMs) void load();
   };
   window.addEventListener("focus", onFocus);
   timer = window.setInterval(load, refreshIntervalMs);
-  container.__fitbitDashboardDispose = () => {
+  void load();
+  return () => {
     disposed = true;
+    readController?.abort();
+    authorizationWindow?.close();
+    if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
     window.clearInterval(timer);
     window.removeEventListener("focus", onFocus);
+    container.replaceChildren();
   };
-  void load();
 }
 
-window.AkashicDashboard.registerPlugin({
-  id: "fitbit_health",
+function fitbitAuthorizationUrl(payload) {
+  const url = new URL(payload?.url ?? "");
+  if (url.protocol !== "https:" || url.hostname !== "www.fitbit.com" || url.pathname !== "/oauth2/authorize") {
+    throw new Error("Fitbit 授权地址无效");
+  }
+  return url.href;
+}
+
+const panel = {
+  id: "fitbit-health",
   label: "Fitbit 健康",
   viewLabel: "Fitbit 健康",
+  order: 40,
   layout: "workbench",
   pageSize: 1,
   rowKey: "id",
   columns: [{ key: "id", label: "Fitbit", flex: true }],
-  getCount() {
+  getCount(_options) {
     return 1;
   },
-  async fetchPage() {
+  async fetchPage(_options) {
     return { items: [], total: 0 };
   },
   renderMain(container) {
-    renderFitbitDashboard(container);
+    return renderFitbitDashboard(container);
   },
-});
+};
+
+export function activate(ctx) {
+  dashboardRequest = ctx.http.request;
+  const release = ctx.ui.inject("workbench.panels.v2", (mount) => mount.register(panel));
+  return () => {
+    release();
+    dashboardRequest = null;
+  };
+}

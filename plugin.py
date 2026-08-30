@@ -41,7 +41,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.2.1"
+version = "3.2.2"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
@@ -51,6 +51,12 @@ inject = (
     UI_SLOTS,
 )
 dashboard_module = "dashboard.py"
+web_module = "web_module.js"
+web_requires = ("workbench.panels.v2",)
+web_provides = ()
+web_contract_digests = {
+    "workbench.panels.v2": "fb6417c9bf532c1fdb344767d06065d5d3293da85deb64eff1e8088889a33bcb",
+}
 
 
 async def apply(ctx: Context, config: FitbitConfig) -> None:

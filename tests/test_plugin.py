@@ -51,7 +51,7 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.2.1"
+    assert plugin_module.version == "3.2.2"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx", "config")
     assert (
         ComposablePlugin.from_module(plugin_module).dashboard_module == "dashboard.py"
@@ -136,7 +136,7 @@ async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path)
 def test_static_manifest_freezes_runtime_and_candidate_exclusions() -> None:
     manifest = load_static_plugin_manifest(ROOT)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.2.1"
+    assert manifest.version == "3.2.2"
     assert manifest.requirements == ("requirements.txt",)
     assert len(manifest.managed_processes) == 1
     assert manifest.managed_processes[0].formal_port == 18765
