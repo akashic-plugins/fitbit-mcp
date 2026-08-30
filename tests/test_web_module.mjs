@@ -79,7 +79,7 @@ function installPanel(http) {
   const release = activate({
     ui: {
       inject(contract, callback) {
-        assert.equal(contract, "workbench.panels.v1");
+        assert.equal(contract, "workbench.panels.v2");
         return callback({
           register(definition) {
             panel = definition;
@@ -100,8 +100,8 @@ test("Workbench panel renders the current monitor snapshot through ctx.http", as
     return response(overview);
   });
 
-  assert.equal(fixture.panel.id, "fitbit");
-  const dispose = fixture.panel.render(fixture.host);
+  assert.equal(fixture.panel.id, "fitbit-health");
+  const dispose = fixture.panel.renderMain(fixture.host, {});
   await settle();
 
   assert.equal(fixture.host.querySelector("[data-fitbit-state]").textContent, "清醒");
@@ -133,7 +133,7 @@ test("Workbench panel coalesces focus loads and disposes its request and interva
   fixture.window.setInterval = () => 17;
   fixture.window.clearInterval = (timer) => { cleared = timer; };
 
-  const dispose = fixture.panel.render(fixture.host);
+  const dispose = fixture.panel.renderMain(fixture.host, {});
   fixture.window.dispatchEvent(new fixture.window.Event("focus"));
   fixture.window.dispatchEvent(new fixture.window.Event("focus"));
 
@@ -156,7 +156,7 @@ test("Workbench panel clears its delayed refresh callback on dispose", async () 
   };
   fixture.window.clearTimeout = (timer) => { cleared = timer; };
 
-  const dispose = fixture.panel.render(fixture.host);
+  const dispose = fixture.panel.renderMain(fixture.host, {});
   await settle();
   fixture.host.querySelector("[data-fitbit-refresh]").click();
   await settle();
@@ -181,7 +181,7 @@ test("Workbench refresh starts a new overview read after a slow initial load", a
   let delayedRefresh;
   fixture.window.setTimeout = (callback) => { delayedRefresh = callback; return 23; };
 
-  const dispose = fixture.panel.render(fixture.host);
+  const dispose = fixture.panel.renderMain(fixture.host, {});
   fixture.host.querySelector("[data-fitbit-refresh]").click();
   await settle();
   delayedRefresh();
@@ -214,7 +214,7 @@ test("Workbench panel requests a plugin-owned authorization URL before opening i
     return authorizationWindow;
   };
 
-  const dispose = fixture.panel.render(fixture.host);
+  const dispose = fixture.panel.renderMain(fixture.host, {});
   await settle();
   fixture.host.querySelector("[data-fitbit-auth]").click();
   await settle();
@@ -241,7 +241,7 @@ test("Workbench disposer closes an authorization popup before navigation commits
     location: { replace() {} },
   });
 
-  const dispose = fixture.panel.render(fixture.host);
+  const dispose = fixture.panel.renderMain(fixture.host, {});
   await settle();
   fixture.host.querySelector("[data-fitbit-auth]").click();
   dispose();
