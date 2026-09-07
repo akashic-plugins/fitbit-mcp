@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 from pathlib import Path
@@ -8,6 +9,8 @@ from pathlib import Path
 import pytest
 from agent.plugins.generation import PluginGeneration
 from agent.plugins.manager import PluginManager
+from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironments
+from agent.plugins.static_manifest import load_static_plugin_manifest
 from agent.plugins.snapshot import RuntimeSnapshot
 from bus.event_bus import EventBus
 from plugins.eventmail import plugin as content_plugin
@@ -46,6 +49,18 @@ def _stage_plugin(tmp_path: Path) -> Path:
     content_target = source.parent / "content"
     shutil.copytree(content_source, content_target)
     return source
+
+
+def _prepare_python_environment(source: Path, workspace: Path) -> None:
+    """通过安装 owner 为测试 artifact 固定独立 Python 环境。"""
+
+    manifest = load_static_plugin_manifest(source)
+    environments = PythonEnvironments(workspace)
+    refs = {
+        item.runtime_root: environments.prepare(source, item)
+        for item in manifest.python
+    }
+    (source / ENVIRONMENT_FILE).write_text(json.dumps(refs), encoding="utf-8")
 
 
 def test_stage_plugin_uses_explicit_fixture_python(
@@ -95,11 +110,13 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
 
     # 1. 正式启动真实 monitor/MCP handshake，但不调用 Fitbit 外部 API。
     plugin_root = _stage_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    _prepare_python_environment(plugin_root, workspace)
     manager = PluginManager(
         plugin_dirs=[plugin_root.parent],
         event_bus=EventBus(),
         tool_registry=None,
-        workspace=tmp_path / "workspace",
+        workspace=workspace,
         installed_cache_root=tmp_path / "home" / "cache",
     )
     stable_snapshot = None
@@ -121,7 +138,6 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         assert stable_runtime.processes.endpoint("monitor").port == 18765
         assert stable_runtime.mcp is not None
         stable_route = stable_runtime.mcp.server("fitbit").route()
-        assert stable_route.mode == "formal"
         await stable_route.aclose()
         formal_data = tmp_path / "workspace/plugin-data/fitbit-builtin"
         formal_digest = _tree_digest(formal_data)
@@ -133,6 +149,7 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
                 path.read_text(encoding="utf-8").replace("3.2.1", "3.2.2"),
                 encoding="utf-8",
             )
+        _prepare_python_environment(plugin_root, workspace)
         candidate = await manager.prepare_candidate("fitbit")
         assert candidate is not None and candidate.runtime_snapshot is not None
         assert candidate.validation_workspace is not None
@@ -156,11 +173,18 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
             assert candidate_runtime is not None
             assert candidate_runtime.mode == "candidate"
             assert candidate_runtime.mcp is not None
-            async with candidate_runtime.mcp.route("fitbit") as candidate_route:
-                assert set(candidate_route.tool_names) == {
-                    "fitbit_health_snapshot",
-                    "fitbit_sleep_report",
-                }
+            assert candidate_runtime.processes is not None
+            candidate_port = candidate_runtime.processes.endpoint("monitor").port
+            assert candidate_port != 18765
+            candidate_server = candidate_runtime.mcp.server("fitbit")
+            assert set(candidate_server.tool_names) == {
+                "fitbit_health_snapshot",
+                "fitbit_sleep_report",
+            }
+            async with candidate_server.route() as candidate_route:
+                result = await candidate_route.call("fitbit_health_snapshot", {})
+                assert result.success
+                assert '"available"' in result.output
             candidate_checked = True
             await original_invariants(generation, snapshot)
 

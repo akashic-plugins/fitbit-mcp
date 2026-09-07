@@ -73,9 +73,11 @@ async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
     await _mount_services(root, tmp_path)
     data_dir = tmp_path / "plugin-data"
 
+    plugin = ComposablePlugin.from_module(plugin_module)
     await root.mount(
-        ComposablePlugin.from_module(plugin_module),
+        plugin.apply,
         name="fitbit",
+        inject=plugin.inject,
         runtime=PluginRuntime(
             plugin_id="fitbit",
             generation_id="fitbit:test",
@@ -114,9 +116,11 @@ async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path)
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(TIMERS, PluginTimers.candidate_validation())
     await root.context.provide(UI_SLOTS, ui_slots)
+    plugin = ComposablePlugin.from_module(plugin_module)
     await root.mount(
-        ComposablePlugin.from_module(plugin_module),
+        plugin.apply,
         name="fitbit",
+        inject=plugin.inject,
         runtime=PluginRuntime(
             plugin_id="fitbit",
             generation_id="fitbit:without-eventmail",
@@ -159,7 +163,7 @@ def test_candidate_copy_omits_fitbit_credentials(tmp_path: Path) -> None:
     (source / "mobile_sleep_projection.json").write_text('{"status":"ok"}\n')
     manifest = load_static_plugin_manifest(ROOT)
 
-    inventory = manager_module._copy_validation_data(  # pyright: ignore[reportPrivateUsage]
+    inventory = manager_module._copy_validation_tree(  # pyright: ignore[reportPrivateUsage]
         source,
         target,
         manifest.exclude_data_paths,
