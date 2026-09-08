@@ -57,3 +57,7 @@ FitbitContentRuntime
 | 纯诊断日志 | 各产生日志的 owner | 本实现不新增持久诊断日志 | 不适用 | 不适用 | 未来若新增，只能按固定数量轮转 | 固定轮转配置与当前日志文件 |
 
 因此，“外部 ACK 成功”不会删除已发生的健康事实：monitor 的 pending 项可以消失，但 Content 的 settled row 仍保留原 payload 与 settlement receipt。adapter 不另造第二份历史或 ACK ledger。
+
+## 用户工具发现
+
+`plugin.py` 向 `TOOLS` 注册 `mcp_fitbit__fitbit_health_snapshot` 和 `mcp_fitbit__fitbit_sleep_report`。`tool_catalog.json` 保存 MCP `tools/list` 的描述和参数；更新 MCP 签名或描述时同步更新目录。插件加载不会启动 MCP，实际调用通过本插件的 MCP 路由执行。两个工具只读，可重试；参数校验归 MCP 服务所有。

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from plugins.tools.plugin import TOOLS
+from .tools import register_tools
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent.plugin_composition import (
@@ -41,10 +44,11 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.2.2"
+version = "3.2.3"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
+    TOOLS,
     MANAGED_PROCESSES,
     MCP_SERVERS,
     TIMERS,
@@ -89,6 +93,8 @@ async def apply(ctx: Context, config: FitbitConfig) -> None:
             candidate_env={"FITBIT_BACKEND": "recording"},
         ),
     )
+
+    await register_tools(ctx)
 
     # 2. EventMail 存在时，独立子 Fiber 才启动健康来源。
     async def apply_eventmail(source_ctx: Context) -> None:

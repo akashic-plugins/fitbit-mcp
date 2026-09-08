@@ -3,6 +3,8 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+from plugins.tools.plugin import TOOLS, ToolCatalog
+
 import pytest
 from agent.plugin_composition import (
     MANAGED_PROCESSES,
@@ -51,7 +53,7 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.2.2"
+    assert plugin_module.version == "3.2.3"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx", "config")
     assert (
         ComposablePlugin.from_module(plugin_module).dashboard_module == "dashboard.py"
@@ -69,6 +71,7 @@ async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
     ui_slots = PluginUiSlots()
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
+    await root.context.provide(TOOLS, ToolCatalog(root.context))
     await root.context.provide(UI_SLOTS, ui_slots)
     await _mount_services(root, tmp_path)
     data_dir = tmp_path / "plugin-data"
@@ -103,6 +106,7 @@ async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
     assert mcp.candidate_env == {"FITBIT_BACKEND": "recording"}
     assert mobile.descriptor.navigation_label == "健康状态"
     assert data_dir.joinpath("adapter.sqlite3").is_file()
+    assert any(item["name"].startswith("mcp_fitbit__") for item in root.context.require(TOOLS).descriptions())
     await root.dispose()
 
 
@@ -114,6 +118,7 @@ async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path)
     ui_slots = PluginUiSlots()
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
+    await root.context.provide(TOOLS, ToolCatalog(root.context))
     await root.context.provide(TIMERS, PluginTimers.candidate_validation())
     await root.context.provide(UI_SLOTS, ui_slots)
     plugin = ComposablePlugin.from_module(plugin_module)
@@ -134,13 +139,14 @@ async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path)
     assert "fitbit" in _freeze_plugin_mcp_servers(servers, root.instance_token)
     assert "fitbit" in ui_slots.freeze()
     assert not (tmp_path / "plugin-data/adapter.sqlite3").exists()
+    assert any(item["name"].startswith("mcp_fitbit__") for item in root.context.require(TOOLS).descriptions())
     await root.dispose()
 
 
 def test_static_manifest_freezes_runtime_and_candidate_exclusions() -> None:
     manifest = load_static_plugin_manifest(ROOT)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.2.2"
+    assert manifest.version == "3.2.3"
     assert manifest.requirements == ("requirements.txt",)
     assert len(manifest.managed_processes) == 1
     assert manifest.managed_processes[0].formal_port == 18765
