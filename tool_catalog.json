@@ -1,0 +1,28 @@
+[
+  {
+    "name": "fitbit_health_snapshot",
+    "description": "获取当前 Fitbit 健康状态快照。",
+    "parameters": {
+      "properties": {},
+      "title": "fitbit_health_snapshotArguments",
+      "type": "object"
+    },
+    "read_only": true
+  },
+  {
+    "name": "fitbit_sleep_report",
+    "description": "获取最近 N 天 Fitbit 睡眠质量报告。",
+    "parameters": {
+      "properties": {
+        "days": {
+          "default": 7,
+          "title": "Days",
+          "type": "integer"
+        }
+      },
+      "title": "fitbit_sleep_reportArguments",
+      "type": "object"
+    },
+    "read_only": true
+  }
+]
