@@ -4,7 +4,7 @@ import inspect
 from pathlib import Path
 
 from plugins.tools.plugin import TOOLS, ToolCatalog
-from fitbit_test_plugin.tools import FITBIT_TOOLS
+from fitbit_test_plugin.tools import FITBIT_TOOLS  # pyright: ignore[reportMissingImports]  # conftest 注册测试包。
 
 import pytest
 from agent.plugin_composition import (
