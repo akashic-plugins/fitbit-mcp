@@ -94,7 +94,7 @@ async def apply(ctx: Context, config: FitbitConfig) -> None:
         ),
     )
 
-    await register_tools(ctx)
+    await register_tools(ctx, description=desc)
 
     # 2. EventMail 存在时，独立子 Fiber 才启动健康来源。
     async def apply_eventmail(source_ctx: Context) -> None:

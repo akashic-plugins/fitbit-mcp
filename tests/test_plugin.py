@@ -4,6 +4,7 @@ import inspect
 from pathlib import Path
 
 from plugins.tools.plugin import TOOLS, ToolCatalog
+from fitbit_test_plugin.tools import FITBIT_TOOLS
 
 import pytest
 from agent.plugin_composition import (
@@ -106,7 +107,7 @@ async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
     assert mcp.candidate_env == {"FITBIT_BACKEND": "recording"}
     assert mobile.descriptor.navigation_label == "健康状态"
     assert data_dir.joinpath("adapter.sqlite3").is_file()
-    assert any(item["name"].startswith("mcp_fitbit__") for item in root.context.require(TOOLS).descriptions())
+    assert any(item["name"].startswith("mcp_fitbit__") for item in (ref.description for ref in root.context.require(FITBIT_TOOLS).refs))
     await root.dispose()
 
 
@@ -139,7 +140,7 @@ async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path)
     assert "fitbit" in _freeze_plugin_mcp_servers(servers, root.instance_token)
     assert "fitbit" in ui_slots.freeze()
     assert not (tmp_path / "plugin-data/adapter.sqlite3").exists()
-    assert any(item["name"].startswith("mcp_fitbit__") for item in root.context.require(TOOLS).descriptions())
+    assert any(item["name"].startswith("mcp_fitbit__") for item in (ref.description for ref in root.context.require(FITBIT_TOOLS).refs))
     await root.dispose()
 
 

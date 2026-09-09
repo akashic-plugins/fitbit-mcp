@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from agent.plugins.generation import PluginGeneration
+from session.log import MessageLog
 from agent.plugins.manager import PluginManager
 from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironments
 from agent.plugins.static_manifest import load_static_plugin_manifest
@@ -112,8 +113,10 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
     plugin_root = _stage_plugin(tmp_path)
     workspace = tmp_path / "workspace"
     _prepare_python_environment(plugin_root, workspace)
+    log = MessageLog(tmp_path / "sessions.db")
     manager = PluginManager(
-        plugin_dirs=[plugin_root.parent],
+        message_log=log,
+        plugin_dirs=[plugin_root.parent, Path(os.environ["AKASHIC_AGENT_ROOT"]) / "plugins" / "tools"],
         event_bus=EventBus(),
         tool_registry=None,
         workspace=workspace,
@@ -202,6 +205,7 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         assert not validation_root.exists()
     finally:
         await manager.terminate_all()
+        log.close()
 
     # 3. Manager 终止后进程、MCP 与 Root effects 全部归零。
     assert stable_snapshot is not None and stable_snapshot.composition_root is not None
