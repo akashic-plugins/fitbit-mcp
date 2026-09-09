@@ -5,12 +5,15 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from agent.plugin_composition import MCP_SERVERS, Context
+from agent.plugin_composition import MCP_SERVERS, Context, ServiceKey
 from agent.plugins.mcp_generation_host import McpRoute
 from plugins.tools.api import BoundTool, CallSource, Result
-from plugins.tools.plugin import TOOLS
+from plugins.tools.plugin import TOOLS, ToolRef, ToolView
 from session.message import ContentPart
 from session.message_codec import json_value
+
+
+FITBIT_TOOLS = ServiceKey[ToolView]("fitbit.tools.v1")
 
 
 class McpTool:
@@ -39,14 +42,16 @@ class McpTool:
         return None
 
 
-async def register_tools(ctx: Context) -> None:
+async def register_tools(ctx: Context, *, description: str) -> None:
     """发布随源码交付的发现目录；只有实际调用才打开 MCP。"""
     catalog = json.loads(Path(__file__).with_name("tool_catalog.json").read_text())
-    for item in catalog:
-        await _register_tool(ctx, item)
+    tools = ctx.require(TOOLS)
+    await tools.declare_group(ctx, description=description)
+    refs = [await _register_tool(ctx, item) for item in catalog]
+    await ctx.provide(FITBIT_TOOLS, tools.view(*refs))
 
 
-async def _register_tool(ctx: Context, item: dict) -> None:
+async def _register_tool(ctx: Context, item: dict) -> ToolRef:
     """固定单个工具的描述、风险和所属 generation 路由。"""
     @asynccontextmanager
     async def open_tool(_options: Mapping[str, object]) -> AsyncIterator[BoundTool]:
@@ -56,7 +61,7 @@ async def _register_tool(ctx: Context, item: dict) -> None:
             async with server.route() as route:
                 yield McpTool(route, item["name"], idempotent=item["read_only"])
 
-    await ctx.require(TOOLS).register(
+    return await ctx.require(TOOLS).register(
         ctx,
         name=f"mcp_fitbit__{item['name']}",
         description=f"[MCP:fitbit] {item['description']}",

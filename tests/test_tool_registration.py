@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from agent.plugin_composition import MCP_SERVERS
 from agent.plugins.mcp_generation_host import McpCallResult
-from plugins.tools.plugin import TOOLS
+from plugins.tools.plugin import TOOLS, ToolRef, ToolView
 from fitbit_test_plugin.tools import register_tools
 
 
@@ -23,8 +23,15 @@ async def test_discovery_is_lazy_and_calls_keep_route_errors():
     opened = []
 
     class Catalog:
+        async def declare_group(self, ctx, **kwargs):
+            pass
+
+        def view(self, *refs):
+            return ToolView(refs)
+
         async def register(self, ctx, **record):
             registrations[record["name"]] = record
+            return ToolRef(record["name"], record)
 
     class Route:
         async def call(self, name, arguments):
@@ -51,8 +58,10 @@ async def test_discovery_is_lazy_and_calls_keep_route_errors():
             yield server
 
     services = {TOOLS: Catalog(), MCP_SERVERS: Servers()}
-    ctx = SimpleNamespace(require=services.__getitem__)
-    await register_tools(ctx)
+    async def provide(key, value):
+        services[key] = value
+    ctx = SimpleNamespace(require=services.__getitem__, provide=provide)
+    await register_tools(ctx, description="fixture MCP tools")
     assert not opened
     assert not calls
     assert len(registrations) == len(records)
