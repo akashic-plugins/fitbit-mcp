@@ -433,7 +433,7 @@ const panel = {
   pageSize: 1,
   rowKey: "id",
   columns: [{ key: "id", label: "Fitbit", flex: true }],
-  getCount(_options) {
+  async getCount(_options) {
     return 1;
   },
   async fetchPage(_options) {
