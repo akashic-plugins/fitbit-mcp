@@ -121,6 +121,16 @@ test("Workbench panel renders the current monitor snapshot through ctx.http", as
 });
 
 
+test("Workbench panel count follows the async v2 contract", async () => {
+  const fixture = installPanel(async () => response(overview));
+  const count = fixture.panel.getCount({ signal: new AbortController().signal });
+
+  assert.equal(typeof count?.then, "function");
+  assert.equal(await count, 1);
+  fixture.release();
+});
+
+
 test("Workbench panel coalesces focus loads and disposes its request and interval", () => {
   let requests = 0;
   let signal;
