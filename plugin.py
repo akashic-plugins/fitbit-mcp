@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from plugins.tools.plugin import TOOLS
+from ._tool_contract import TOOLS
 from .tools import register_tools
 
 from pydantic import BaseModel, ConfigDict, Field

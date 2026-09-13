@@ -11,11 +11,16 @@ import shutil
 import uuid
 from pathlib import Path
 
-from agent.plugins.manifest import (
+if __package__ in (None, ""):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts._workspace_support import (
+    WorkspaceInstanceLock,
     ensure_workspace_plugin_data_dir,
     validate_workspace_plugin_data_path,
 )
-from bootstrap.workspace_lock import WorkspaceInstanceLock
 
 
 _DATA_FILES = (

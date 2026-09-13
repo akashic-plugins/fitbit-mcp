@@ -63,8 +63,8 @@ PYTHONPATH=/mnt/data/coding/akasic-agent:$PWD:<fitbit-cache-site-packages> \
 PYTHONPATH=/mnt/data/coding/akasic-agent:$PWD \
   /mnt/data/coding/akasic-agent/.venv/bin/pyright plugin.py dashboard.py
 
-# 用临时 HOME/workspace 和真实 Akashic Dashboard 外壳预览
-PYTHONPATH=/mnt/data/coding/akasic-agent:$PWD \
+# 用临时插件数据根预览插件自己的 Dashboard 路由；不写正式 workspace
+PYTHONPATH=$PWD:<fitbit-cache-site-packages> \
   /mnt/data/coding/akasic-agent/.venv/bin/python scripts/preview_dashboard.py
 ```
 
