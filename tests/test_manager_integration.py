@@ -14,7 +14,7 @@ from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironment
 from agent.plugins.static_manifest import load_static_plugin_manifest
 from agent.plugins.snapshot import RuntimeSnapshot
 from bus.event_bus import EventBus
-from plugins.eventmail import plugin as content_plugin
+from plugins.content import plugin as content_plugin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,7 +159,11 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         validation_root = candidate.validation_workspace.parent
         candidate_snapshot = candidate.runtime_snapshot
         assert candidate_snapshot.composition_root is not None
-        assert candidate_snapshot.composition_root.receipt().optional_pending == ()
+        # EventMail is optional in this composition; the candidate keeps the
+        # dormant source pending until that provider is installed.
+        assert candidate_snapshot.composition_root.receipt().optional_pending == (
+            "fitbit-eventmail-source",
+        )
         assert candidate.validation_workspace != tmp_path / "workspace"
         assert _tree_digest(formal_data) == formal_digest
         original_invariants = manager._post_publish_invariants  # pyright: ignore[reportPrivateUsage]
