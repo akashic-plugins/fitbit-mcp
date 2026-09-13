@@ -20,11 +20,11 @@ if str(_PLUGIN_ROOT) not in sys.path:
 import dashboard
 
 
-def run_preview(plugin_root: Path, host: str, port: int) -> None:
+def run_preview(host: str, port: int) -> None:
     """Run the plugin-owned Dashboard routes against the local monitor."""
 
     # 1. The preview owns only a temporary data root; it never opens the formal workspace.
-    plugin_root = plugin_root.expanduser().resolve(strict=True)
+    plugin_root = _PLUGIN_ROOT
     if not (plugin_root / "web_module.js").is_file():
         raise FileNotFoundError(f"Fitbit Workbench 面板不存在: {plugin_root}")
     with tempfile.TemporaryDirectory(prefix="fitbit-dashboard-preview-") as temp:
@@ -44,16 +44,10 @@ def run_preview(plugin_root: Path, host: str, port: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--plugin-root",
-        type=Path,
-        default=_PLUGIN_ROOT,
-        help="Fitbit 插件源码或已安装 artifact 的根目录",
-    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=2237)
     args = parser.parse_args()
-    run_preview(args.plugin_root, args.host, args.port)
+    run_preview(args.host, args.port)
 
 
 if __name__ == "__main__":
