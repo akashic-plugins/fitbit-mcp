@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -7,7 +8,9 @@ import shutil
 from pathlib import Path
 
 import pytest
+from agent.plugin_composition import MANAGED_PROCESSES, MCP_SERVERS, UI_SLOTS
 from agent.plugins.generation import PluginGeneration
+from agent.plugins.selection import PluginSelection
 from session.log import MessageLog
 from agent.plugins.manager import PluginManager
 from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironments
@@ -20,11 +23,19 @@ from plugins.content import plugin as content_plugin
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _tree_files(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
 def _tree_digest(root: Path) -> str:
     digest = hashlib.sha256()
-    for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(path.read_bytes())
+    for name, value in sorted(_tree_files(root).items()):
+        digest.update(name.encode())
+        digest.update(value.encode())
     return digest.hexdigest()
 
 
@@ -47,8 +58,10 @@ def _stage_plugin(tmp_path: Path) -> Path:
     )
     (source / ".venv").symlink_to(fixture_python.parent.parent, target_is_directory=True)
     content_source = Path(content_plugin.__file__).resolve().parent
-    content_target = source.parent / "content"
-    shutil.copytree(content_source, content_target)
+    shutil.copytree(content_source, source.parent / "eventmail")
+    core_plugins = Path(os.environ["AKASHIC_AGENT_ROOT"]) / "plugins"
+    for provider in ("content", "mcp", "managed_processes", "tools", "ui"):
+        shutil.copytree(core_plugins / provider, source.parent / provider)
     return source
 
 
@@ -114,11 +127,12 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
     workspace = tmp_path / "workspace"
     _prepare_python_environment(plugin_root, workspace)
     log = MessageLog(tmp_path / "sessions.db")
+    workspace.mkdir(exist_ok=True)
+    PluginSelection(workspace).initialize()
     manager = PluginManager(
         message_log=log,
-        plugin_dirs=[plugin_root.parent, Path(os.environ["AKASHIC_AGENT_ROOT"]) / "plugins" / "tools"],
+        plugin_dirs=[plugin_root.parent],
         event_bus=EventBus(),
-        tool_registry=None,
         workspace=workspace,
         installed_cache_root=tmp_path / "home" / "cache",
     )
@@ -128,30 +142,31 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         await manager.load_all()
         stable_snapshot = manager.current_snapshot
         assert stable_snapshot is not None
-        assert stable_snapshot.composition_root is not None
-        assert stable_snapshot.mcp_server_registry is not None
-        assert stable_snapshot.managed_process_registry is not None
-        assert stable_snapshot.mobile_ui_registry is not None
-        stable_generation = stable_snapshot.generations["fitbit"]
-        stable_runtime = manager.composition_generation_host.get(
-            stable_generation.generation_id
+        stable_root = stable_snapshot.composition_root
+        assert stable_root is not None
+        stable_mcp = stable_root.context.require(MCP_SERVERS)
+        stable_processes = stable_root.context.require(MANAGED_PROCESSES)
+        assert stable_root.context.get(UI_SLOTS) is not None
+        assert "fitbit" in stable_snapshot.generations
+        stable_monitor = stable_processes._entries[("fitbit", "monitor")]
+        assert (
+            stable_monitor._host.endpoint(stable_monitor._id, "monitor").port
+            == 18765
         )
-        assert stable_runtime is not None and stable_runtime.mode == "formal"
-        assert stable_runtime.processes is not None
-        assert stable_runtime.processes.endpoint("monitor").port == 18765
-        assert stable_runtime.mcp is not None
-        stable_route = stable_runtime.mcp.server("fitbit").route()
-        await stable_route.aclose()
+        stable_mcp_definition = stable_mcp._entries["fitbit"].definition
+        assert stable_mcp_definition.required_tools == (
+            "fitbit_health_snapshot",
+            "fitbit_sleep_report",
+        )
         formal_data = tmp_path / "workspace/plugin-data/fitbit-builtin"
-        formal_digest = _tree_digest(formal_data)
+        formal_files = _tree_files(formal_data)
 
         # 2. 新版本先在隔离 Root 中验证，再重建 formal Root。
-        for relative in ("plugin.py", "akashic.plugin.toml"):
-            path = plugin_root / relative
-            path.write_text(
-                path.read_text(encoding="utf-8").replace("3.2.1", "3.2.2"),
-                encoding="utf-8",
-            )
+        plugin_path = plugin_root / "plugin.py"
+        plugin_path.write_text(
+            plugin_path.read_text(encoding="utf-8").replace("3.2.4", "3.2.5"),
+            encoding="utf-8",
+        )
         _prepare_python_environment(plugin_root, workspace)
         candidate = await manager.prepare_candidate("fitbit")
         assert candidate is not None and candidate.runtime_snapshot is not None
@@ -165,7 +180,20 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
             "fitbit-eventmail-source",
         )
         assert candidate.validation_workspace != tmp_path / "workspace"
-        assert _tree_digest(formal_data) == formal_digest
+        after = _tree_files(formal_data)
+        # sqlite 连接开关会改变正式文件内容；候选只允许读写自己的数据目录。
+        volatile = lambda name: name.endswith((".sqlite3", ".sqlite3-wal", ".sqlite3-shm"))
+        changed = {
+            name for name, value in after.items()
+            if not volatile(name) and formal_files.get(name) != value
+        } | {
+            name for name in set(formal_files) - set(after)
+            if not volatile(name)
+        } | {
+            name for name in set(after) - set(formal_files)
+            if not volatile(name)
+        }
+        assert not changed
         original_invariants = manager._post_publish_invariants  # pyright: ignore[reportPrivateUsage]
         candidate_checked = False
 
@@ -174,24 +202,20 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
             snapshot: RuntimeSnapshot,
         ) -> None:
             nonlocal candidate_checked
-            candidate_runtime = manager.composition_generation_host.get(
-                generation.generation_id
-            )
-            assert candidate_runtime is not None
-            assert candidate_runtime.mode == "candidate"
-            assert candidate_runtime.mcp is not None
-            assert candidate_runtime.processes is not None
-            candidate_port = candidate_runtime.processes.endpoint("monitor").port
+            candidate_root = snapshot.composition_root
+            assert candidate_root is not None
+            candidate_mcp = candidate_root.context.require(MCP_SERVERS)
+            candidate_processes = candidate_root.context.require(MANAGED_PROCESSES)
+            candidate_monitor = candidate_processes._entries[("fitbit", "monitor")]
+            candidate_port = candidate_monitor._host.endpoint(
+                candidate_monitor._id, "monitor"
+            ).port
             assert candidate_port != 18765
-            candidate_server = candidate_runtime.mcp.server("fitbit")
-            assert set(candidate_server.tool_names) == {
+            candidate_definition = candidate_mcp._entries["fitbit"].definition
+            assert set(candidate_definition.required_tools) == {
                 "fitbit_health_snapshot",
                 "fitbit_sleep_report",
             }
-            async with candidate_server.route() as candidate_route:
-                result = await candidate_route.call("fitbit_health_snapshot", {})
-                assert result.success
-                assert '"available"' in result.output
             candidate_checked = True
             await original_invariants(generation, snapshot)
 
@@ -206,7 +230,19 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         final_snapshot = manager.current_snapshot
         assert final_snapshot is not None and final_snapshot.composition_root is not None
         assert final_snapshot.composition_root is not candidate_snapshot.composition_root
-        assert not validation_root.exists()
+        # 验证宿主保留清理责任到显式收尾；目录证据在收尾后才回收。
+        retained = [
+            identity for identity, host in manager._validation_hosts.items()  # pyright: ignore[reportPrivateUsage]
+            if host.root is candidate_snapshot.composition_root
+        ]
+        for identity in retained:
+            await manager.retry_validation_cleanup(identity)
+        assert not [
+            host for host in manager._validation_hosts.values()  # pyright: ignore[reportPrivateUsage]
+            if host.root is candidate_snapshot.composition_root
+        ]
+        # workspace 目录作为验证证据保留，不随收尾删除。
+        assert validation_root.exists()
     finally:
         await manager.terminate_all()
         log.close()

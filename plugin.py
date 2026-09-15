@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from ._tool_contract import TOOLS
+from importlib import import_module
 from .tools import register_tools
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,6 +21,7 @@ from agent.plugin_composition import (
     MobileUiDefinition,
     MobileUiNavigation,
 )
+from agent.plugin_composition.ui import UI
 from .src.content_adapter import (
     FitbitWakeRuntime,
     FitbitMonitorClient,
@@ -52,22 +54,27 @@ inject = (
     MANAGED_PROCESSES,
     MCP_SERVERS,
     TIMERS,
+    UI,
     UI_SLOTS,
 )
-dashboard_module = "dashboard.py"
-web_module = "web_module.js"
-web_requires = ("workbench.panels.v2",)
-web_provides = ()
-web_contract_digests = {
-    "workbench.panels.v2": "fb6417c9bf532c1fdb344767d06065d5d3293da85deb64eff1e8088889a33bcb",
-}
 
 
-async def apply(ctx: Context, config: FitbitConfig) -> None:
+async def apply(ctx: Context) -> None:
     """装配 monitor、工具、Wake 来源和移动界面。"""
 
+    config = FitbitConfig.model_validate(ctx.config)
+    await ctx.require(UI).register(
+        ctx, web="web_module.js",
+        dashboard=lambda: import_module(".dashboard", __package__),
+        requires=("workbench.panels.v2",),
+        provides=(),
+        contract_digests={
+            "workbench.panels.v2": "fb6417c9bf532c1fdb344767d06065d5d3293da85deb64eff1e8088889a33bcb",
+        },
+    )
+
     # 1. 登记现有 monitor 与用户显式调用的普通 MCP 工具
-    await ctx.require(MANAGED_PROCESSES).register(
+    monitor = await ctx.require(MANAGED_PROCESSES).register(
         ctx,
         ManagedProcessDefinition(
             name="monitor",
@@ -89,7 +96,7 @@ async def apply(ctx: Context, config: FitbitConfig) -> None:
                 "fitbit_health_snapshot",
                 "fitbit_sleep_report",
             ),
-            endpoint_env=(EndpointEnv("FITBIT_MONITOR_PORT", "monitor"),),
+            endpoint_env=(EndpointEnv("FITBIT_MONITOR_PORT", monitor),),
             candidate_env={"FITBIT_BACKEND": "recording"},
         ),
     )
