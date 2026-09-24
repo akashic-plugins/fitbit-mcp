@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from typing import cast
 
 from plugins.tools.plugin import TOOLS, ToolCatalog
+from agent.plugin_composition.tasks import TaskAdmission
+from agent.control.timer import AsyncioOneShotTimer
+from agent.plugin_composition.host import HOST_INFO, HostInfo
 from fitbit_test_plugin.tools import FITBIT_TOOLS  # pyright: ignore[reportMissingImports]  # conftest 注册测试包。
 
 import pytest
@@ -19,7 +23,7 @@ from agent.plugin_composition import (
 )
 from agent.plugin_composition.execution import EXECUTION
 from agent.plugin_composition.process_slots import ManagedProcessDefinition
-from agent.plugin_composition.ui import UI
+from agent.plugin_composition.ui import DASHBOARD_ROUTES, UI
 from contextlib import asynccontextmanager
 from plugins.mcp.plugin import McpServers
 from plugins.ui.mobile import MobileUiSlots
@@ -75,7 +79,7 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
         def bind(self, source_id: str) -> object:
             return object()
 
-    await root.context.provide(TIMERS, PluginTimers.candidate_validation())
+    await root.context.provide(TIMERS, PluginTimers(AsyncioOneShotTimer()))
     _ = await root.context.provide(EVENTMAIL_ALERT_SOURCE, Sources())
     _ = await root.context.provide(EVENTMAIL_CONTEXT_SOURCE, Sources())
 
@@ -103,8 +107,10 @@ async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:test"))
-    await root.context.provide(TOOLS, ToolCatalog(root.context))
+    await root.context.provide(TOOLS, ToolCatalog(root.context, cast(TaskAdmission, None)))
     await root.context.provide(UI, Ui(root.context))
+    await root.context.provide(DASHBOARD_ROUTES, ())
+    await root.context.provide(HOST_INFO, HostInfo(boot_id="fitbit-test", validation=False))
     await root.context.provide(UI_SLOTS, ui_slots)
     await _mount_services(root, tmp_path)
     data_dir = tmp_path / "plugin-data"
@@ -126,9 +132,10 @@ async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
         ),
     )
 
+    assert root.receipt().ready, root.receipt().incidents
     process = processes.definitions["monitor"]
     mcp = servers._entries["fitbit"].definition
-    mobile = ui_slots._registrations["fitbit"][1].descriptor
+    mobile = ui_slots._registrations["fitbit"].descriptor
     assert process.cwd == "."
     assert process.port_env == "FITBIT_MONITOR_PORT"
     assert mcp.required_tools == ("fitbit_health_snapshot", "fitbit_sleep_report")
@@ -148,9 +155,11 @@ async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path)
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:without-eventmail"))
-    await root.context.provide(TOOLS, ToolCatalog(root.context))
-    await root.context.provide(TIMERS, PluginTimers.candidate_validation())
+    await root.context.provide(TOOLS, ToolCatalog(root.context, cast(TaskAdmission, None)))
+    await root.context.provide(TIMERS, PluginTimers(AsyncioOneShotTimer()))
     await root.context.provide(UI, Ui(root.context))
+    await root.context.provide(DASHBOARD_ROUTES, ())
+    await root.context.provide(HOST_INFO, HostInfo(boot_id="fitbit-test", validation=False))
     await root.context.provide(UI_SLOTS, ui_slots)
     plugin = ComposablePlugin.from_module(
         plugin_module, load_static_plugin_manifest(ROOT),
@@ -169,6 +178,7 @@ async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path)
         ),
     )
 
+    assert root.receipt().ready, root.receipt().incidents
     assert "fitbit" in servers._entries
     assert "fitbit" in ui_slots._registrations
     assert not (tmp_path / "plugin-data/adapter.sqlite3").exists()

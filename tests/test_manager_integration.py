@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -9,13 +8,11 @@ from pathlib import Path
 
 import pytest
 from agent.plugin_composition import MANAGED_PROCESSES, MCP_SERVERS, UI_SLOTS
-from agent.plugins.generation import PluginGeneration
 from agent.plugins.selection import PluginSelection
 from session.log import MessageLog
 from agent.plugins.manager import PluginManager
 from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironments
 from agent.plugins.static_manifest import load_static_plugin_manifest
-from agent.plugins.snapshot import RuntimeSnapshot
 from bus.event_bus import EventBus
 from plugins.content import plugin as content_plugin
 
@@ -116,19 +113,17 @@ def test_ci_creates_and_exports_absolute_fixture_python_before_pytest() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
+async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证 formal boot 与 candidate 重建共享声明而不共享 Root owner。"""
+    """Load the real artifact, replace its owner, and keep the data directory."""
 
-    # 1. 正式启动真实 monitor/MCP handshake，但不调用 Fitbit 外部 API。
     plugin_root = _stage_plugin(tmp_path)
     workspace = tmp_path / "workspace"
-    _prepare_python_environment(plugin_root, workspace)
-    log = MessageLog(tmp_path / "sessions.db")
     workspace.mkdir(exist_ok=True)
     PluginSelection(workspace).initialize()
+    _prepare_python_environment(plugin_root, workspace)
+    log = MessageLog(tmp_path / "sessions.db")
     manager = PluginManager(
         message_log=log,
         plugin_dirs=[plugin_root.parent],
@@ -136,118 +131,48 @@ async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
         workspace=workspace,
         installed_cache_root=tmp_path / "home" / "cache",
     )
-    stable_snapshot = None
-    validation_root = None
+    root = None
     try:
         await manager.load_all()
-        stable_snapshot = manager.current_snapshot
-        assert stable_snapshot is not None
-        stable_root = stable_snapshot.composition_root
-        assert stable_root is not None
-        stable_mcp = stable_root.context.require(MCP_SERVERS)
-        stable_processes = stable_root.context.require(MANAGED_PROCESSES)
-        assert stable_root.context.get(UI_SLOTS) is not None
-        assert "fitbit" in stable_snapshot.generations
-        stable_monitor = stable_processes._entries[("fitbit", "monitor")]
-        assert (
-            stable_monitor._host.endpoint(stable_monitor._id, "monitor").port
-            == 18765
+        root = manager.live_root
+        assert root is not None
+        old = manager.generation("fitbit")
+        assert old is not None and old.fiber is not None
+        assert root.context.get(UI_SLOTS) is not None
+        assert root.context.require(MCP_SERVERS)._entries["fitbit"].definition.required_tools == (
+            "fitbit_health_snapshot", "fitbit_sleep_report",
         )
-        stable_mcp_definition = stable_mcp._entries["fitbit"].definition
-        assert stable_mcp_definition.required_tools == (
-            "fitbit_health_snapshot",
-            "fitbit_sleep_report",
-        )
-        formal_data = tmp_path / "workspace/plugin-data/fitbit-builtin"
-        formal_files = _tree_files(formal_data)
+        processes = root.context.require(MANAGED_PROCESSES)
+        monitor = processes._entries[("fitbit", "monitor")]
+        assert monitor._host.endpoint(monitor._id, "monitor").port == 18765
 
-        # 2. 新版本先在隔离 Root 中验证，再重建 formal Root。
+        data_dir = workspace / "plugin-data" / "fitbit-builtin"
+        marker = data_dir / "retained-test-data.txt"
+        marker.write_text("keep this data", encoding="utf-8")
         plugin_path = plugin_root / "plugin.py"
         plugin_path.write_text(
             plugin_path.read_text(encoding="utf-8").replace("3.2.4", "3.2.5"),
             encoding="utf-8",
         )
         _prepare_python_environment(plugin_root, workspace)
-        candidate = await manager.prepare_candidate("fitbit")
-        assert candidate is not None and candidate.runtime_snapshot is not None
-        assert candidate.validation_workspace is not None
-        validation_root = candidate.validation_workspace.parent
-        candidate_snapshot = candidate.runtime_snapshot
-        assert candidate_snapshot.composition_root is not None
-        # EventMail is optional in this composition; the candidate keeps the
-        # dormant source pending until that provider is installed.
-        assert candidate_snapshot.composition_root.receipt().optional_pending == (
-            "fitbit-eventmail-source",
+        result = next(
+            item for item in await manager.reconcile_changed()
+            if item["plugin_id"] == "fitbit"
         )
-        assert candidate.validation_workspace != tmp_path / "workspace"
-        after = _tree_files(formal_data)
-        # sqlite 连接开关会改变正式文件内容；候选只允许读写自己的数据目录。
-        volatile = lambda name: name.endswith((".sqlite3", ".sqlite3-wal", ".sqlite3-shm"))
-        changed = {
-            name for name, value in after.items()
-            if not volatile(name) and formal_files.get(name) != value
-        } | {
-            name for name in set(formal_files) - set(after)
-            if not volatile(name)
-        } | {
-            name for name in set(after) - set(formal_files)
-            if not volatile(name)
-        }
-        assert not changed
-        original_invariants = manager._post_publish_invariants  # pyright: ignore[reportPrivateUsage]
-        candidate_checked = False
-
-        async def inspect_candidate_runtime(
-            generation: PluginGeneration,
-            snapshot: RuntimeSnapshot,
-        ) -> None:
-            nonlocal candidate_checked
-            candidate_root = snapshot.composition_root
-            assert candidate_root is not None
-            candidate_mcp = candidate_root.context.require(MCP_SERVERS)
-            candidate_processes = candidate_root.context.require(MANAGED_PROCESSES)
-            candidate_monitor = candidate_processes._entries[("fitbit", "monitor")]
-            candidate_port = candidate_monitor._host.endpoint(
-                candidate_monitor._id, "monitor"
-            ).port
-            assert candidate_port != 18765
-            candidate_definition = candidate_mcp._entries["fitbit"].definition
-            assert set(candidate_definition.required_tools) == {
-                "fitbit_health_snapshot",
-                "fitbit_sleep_report",
-            }
-            candidate_checked = True
-            await original_invariants(generation, snapshot)
-
-        monkeypatch.setattr(
-            manager,
-            "_post_publish_invariants",
-            inspect_candidate_runtime,
+        assert result["publication_state"] == "active"
+        assert manager.live_root is root
+        new = manager.generation("fitbit")
+        assert new is not None and new is not old and new.fiber is not None
+        assert new.instance is not None and new.instance.version == "3.2.5"
+        assert marker.read_text(encoding="utf-8") == "keep this data"
+        assert root.context.require(MCP_SERVERS)._entries["fitbit"].definition.required_tools == (
+            "fitbit_health_snapshot", "fitbit_sleep_report",
         )
-        result = await manager.publish_prepared("fitbit")
-        assert result["publication_state"] == "committed"
-        assert candidate_checked
-        final_snapshot = manager.current_snapshot
-        assert final_snapshot is not None and final_snapshot.composition_root is not None
-        assert final_snapshot.composition_root is not candidate_snapshot.composition_root
-        # 验证宿主保留清理责任到显式收尾；目录证据在收尾后才回收。
-        retained = [
-            identity for identity, host in manager._validation_hosts.items()  # pyright: ignore[reportPrivateUsage]
-            if host.root is candidate_snapshot.composition_root
-        ]
-        for identity in retained:
-            await manager.retry_validation_cleanup(identity)
-        assert not [
-            host for host in manager._validation_hosts.values()  # pyright: ignore[reportPrivateUsage]
-            if host.root is candidate_snapshot.composition_root
-        ]
-        # workspace 目录作为验证证据保留，不随收尾删除。
-        assert validation_root.exists()
+        monitor = root.context.require(MANAGED_PROCESSES)._entries[("fitbit", "monitor")]
+        assert monitor._host.endpoint(monitor._id, "monitor").port == 18765
     finally:
         await manager.terminate_all()
         log.close()
-
-    # 3. Manager 终止后进程、MCP 与 Root effects 全部归零。
-    assert stable_snapshot is not None and stable_snapshot.composition_root is not None
-    assert stable_snapshot.composition_root.receipt().effects == ()
-    assert stable_snapshot.composition_root.topology_view().listeners == ()
+    assert root is not None
+    assert root.receipt().effects == ()
+    assert root.topology_view().listeners == ()
