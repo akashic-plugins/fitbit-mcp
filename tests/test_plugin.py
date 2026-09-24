@@ -77,7 +77,11 @@ def _execution(root: CompositionRoot, generation_id: str) -> ExecutionAccess:
 async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
     class Sources:
         def bind(self, source_id: str) -> object:
-            return object()
+            class Bound:
+                def close(self) -> None:
+                    return None
+
+            return Bound()
 
     await root.context.provide(TIMERS, PluginTimers(AsyncioOneShotTimer()))
     _ = await root.context.provide(EVENTMAIL_ALERT_SOURCE, Sources())

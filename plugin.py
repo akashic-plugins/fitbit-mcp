@@ -107,11 +107,23 @@ async def apply(ctx: Context) -> None:
     async def apply_eventmail(source_ctx: Context) -> None:
         store = FitbitAdapterStore(source_ctx.data_root / "adapter.sqlite3")
         store.initialize(datetime.now(UTC))
+        alert_source = source_ctx.require(EVENTMAIL_ALERT_SOURCE).bind("fitbit-health-alerts")
+        try:
+            _ = await source_ctx.effect(lambda: alert_source.close, label="fitbit-alert-source-binding")
+        except BaseException:
+            alert_source.close()
+            raise
+        context_source = source_ctx.require(EVENTMAIL_CONTEXT_SOURCE).bind("fitbit-sleep")
+        try:
+            _ = await source_ctx.effect(lambda: context_source.close, label="fitbit-context-source-binding")
+        except BaseException:
+            context_source.close()
+            raise
         runtime = FitbitWakeRuntime(
             store,
             source_ctx.require(TIMERS),
-            source_ctx.require(EVENTMAIL_ALERT_SOURCE).bind("fitbit-health-alerts"),
-            source_ctx.require(EVENTMAIL_CONTEXT_SOURCE).bind("fitbit-sleep"),
+            alert_source,
+            context_source,
             FitbitMonitorClient(),
             poll_interval=timedelta(seconds=config.content.poll_interval_seconds),
             sleep_ttl=timedelta(seconds=config.content.sleep_ttl_seconds),
