@@ -125,7 +125,7 @@ class FitbitWakeRuntime:
                 if receipt.status is TimerStatus.CANCELLED or self._closed:
                     return
                 try:
-                    await asyncio.to_thread(self.tick)
+                    await self.tick()
                 except FitbitMonitorTransientError as error:
                     reason = f"{type(error).__name__}: {error}"
                     health.degrade(reason)
@@ -138,11 +138,11 @@ class FitbitWakeRuntime:
                 self._handle = None
                 await handle.cleanup()
 
-    def tick(self) -> None:
+    async def tick(self) -> None:
         """先结算历史投递，再发布当前 monitor 快照。"""
 
         # 1. 只拉取一次；终态 Alert 先 ACK，其余按稳定身份上报。
-        snapshot = self._monitor_snapshot()
+        snapshot = await asyncio.to_thread(self._monitor_snapshot)
         items = normalize_health_events(snapshot)
         now = _aware(self._now())
         for item in items:
@@ -151,7 +151,7 @@ class FitbitWakeRuntime:
                 event_id=event_id,
             )
             if status in {"delivered", "skipped", "expired"}:
-                self._ensure_not_pending(event_id)
+                await asyncio.to_thread(self._ensure_not_pending, event_id)
                 if self._after_provider_ack is not None:
                     self._after_provider_ack()
                 continue
@@ -170,7 +170,8 @@ class FitbitWakeRuntime:
             observed_at=now,
             expires_at=expires_at,
         )
-        self._store.commit_snapshot(
+        await asyncio.to_thread(
+            self._store.commit_snapshot,
             sleep,
             observed_at=now,
             expires_at=expires_at,
