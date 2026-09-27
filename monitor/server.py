@@ -28,7 +28,7 @@ from paths import CODE_DIR, DATA_DIR, data_path
 # ── 配置 ────────────────────────────────────────────────────────────────────
 BASE_DIR = CODE_DIR
 RUNTIME_LOG_FILE = DATA_DIR / "monitor.runtime.log"
-MOBILE_SLEEP_PROJECTION_FILE = DATA_DIR / "mobile_sleep_projection.json"
+SLEEP_PROJECTION_FILE = DATA_DIR / "mobile_sleep_projection.json"
 
 
 class _TeeTextIO:
@@ -1744,10 +1744,10 @@ def _build_sleep_report_payload(
     return 200, {"summary": summary, "days": days_list}
 
 
-def _write_mobile_sleep_projection(report: dict) -> None:
-    """原子持久化移动端七天睡眠投影，不增加 Fitbit API 请求。"""
+def _write_sleep_projection(report: dict) -> None:
+    """原子持久化插件界面七天睡眠投影，不增加 Fitbit API 请求。"""
 
-    # 1. 从后台已有的基线报告裁剪七天移动投影
+    # 1. 从后台已有的基线报告裁剪七天插件界面投影
     days = report["days"][-7:]
     valid = [day for day in days if not day.get("no_data")]
 
@@ -1756,7 +1756,7 @@ def _write_mobile_sleep_projection(report: dict) -> None:
         present = [value for value in values if value is not None]
         return round(sum(present) / len(present), 1) if present else None
 
-    mobile = {
+    view = {
         "summary": {
             "days_requested": 7,
             "days_with_data": len(valid),
@@ -1769,11 +1769,11 @@ def _write_mobile_sleep_projection(report: dict) -> None:
 
     # 2. 内容版本与更新时间一起落入同一个原子文件
     canonical = json.dumps(
-        mobile, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        view, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     projected_at = datetime.now().astimezone().isoformat()
     projection = {
-        **mobile,
+        **view,
         "data_version": hashlib.sha256(canonical).hexdigest(),
         "projected_at": projected_at,
         "source_through_date": days[-1]["date"] if days else None,
@@ -1781,42 +1781,42 @@ def _write_mobile_sleep_projection(report: dict) -> None:
         "last_refresh_status": "ok",
         "stale_reason": None,
     }
-    _store_mobile_sleep_projection(projection)
+    _store_sleep_projection(projection)
 
 
-def _mark_mobile_sleep_projection_stale(reason: str) -> None:
+def _mark_sleep_projection_stale(reason: str) -> None:
     """保留最近有效数据，只更新后台刷新失败状态。"""
 
-    if not MOBILE_SLEEP_PROJECTION_FILE.exists():
+    if not SLEEP_PROJECTION_FILE.exists():
         return
-    projection = json.loads(MOBILE_SLEEP_PROJECTION_FILE.read_text(encoding="utf-8"))
+    projection = json.loads(SLEEP_PROJECTION_FILE.read_text(encoding="utf-8"))
     if not isinstance(projection, dict):
-        raise TypeError("移动睡眠投影根节点必须是对象")
+        raise TypeError("睡眠投影根节点必须是对象")
     projection["last_refresh_attempt_at"] = datetime.now().astimezone().isoformat()
     projection["last_refresh_status"] = "failed"
     projection["stale_reason"] = reason
-    _store_mobile_sleep_projection(projection)
+    _store_sleep_projection(projection)
 
 
-def _store_mobile_sleep_projection(projection: dict) -> None:
+def _store_sleep_projection(projection: dict) -> None:
     """把完整投影原子替换到持久化路径。"""
 
     encoded = json.dumps(
         projection, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    MOBILE_SLEEP_PROJECTION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temporary = MOBILE_SLEEP_PROJECTION_FILE.with_suffix(".json.tmp")
+    SLEEP_PROJECTION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SLEEP_PROJECTION_FILE.with_suffix(".json.tmp")
     with temporary.open("wb") as stream:
         stream.write(encoded)
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, MOBILE_SLEEP_PROJECTION_FILE)
+    os.replace(temporary, SLEEP_PROJECTION_FILE)
 
 
-def _read_mobile_sleep_projection() -> dict:
+def _read_sleep_projection() -> dict:
     """只读本地投影并返回显式新鲜度，不访问 OAuth 或 Fitbit API。"""
 
-    if not MOBILE_SLEEP_PROJECTION_FILE.exists():
+    if not SLEEP_PROJECTION_FILE.exists():
         return {
             "available": False,
             "reason": "projection_not_ready",
@@ -1831,9 +1831,9 @@ def _read_mobile_sleep_projection() -> dict:
             "days": [],
         }
 
-    projection = json.loads(MOBILE_SLEEP_PROJECTION_FILE.read_text(encoding="utf-8"))
+    projection = json.loads(SLEEP_PROJECTION_FILE.read_text(encoding="utf-8"))
     if not isinstance(projection, dict):
-        raise TypeError("移动睡眠投影根节点必须是对象")
+        raise TypeError("睡眠投影根节点必须是对象")
     projected_at = datetime.fromisoformat(projection["projected_at"])
     age_seconds = max(
         0, int((datetime.now().astimezone() - projected_at).total_seconds())
@@ -1979,12 +1979,12 @@ def _get_sleep_recovery_signal(tokens: dict | None) -> dict:
     )
     if status != 200:
         out = {"available": False, "reason": payload.get("error", "unavailable")}
-        _mark_mobile_sleep_projection_stale(str(out["reason"]))
+        _mark_sleep_projection_stale(str(out["reason"]))
         _sleep_recovery_cache["fetched_at"] = now_ts
         _sleep_recovery_cache["payload"] = dict(out)
         return out
 
-    _write_mobile_sleep_projection(payload)
+    _write_sleep_projection(payload)
 
     valid = [d for d in payload.get("days", []) if not d.get("no_data")]
     if len(valid) < 4:
@@ -2884,10 +2884,10 @@ def api_sleep_report(days: int = 7):
     return JSONResponse(payload, status_code=status)
 
 
-@app.get("/api/mobile/sleep_projection")
-def api_mobile_sleep_projection():
+@app.get("/api/fitbit/sleep_projection")
+def api_sleep_projection():
     """返回后台轮询维护的本地睡眠投影，绝不触发 OAuth。"""
-    return JSONResponse(_read_mobile_sleep_projection())
+    return JSONResponse(_read_sleep_projection())
 
 
 @app.get("/api/refresh")

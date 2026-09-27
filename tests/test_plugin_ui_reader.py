@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from src import mobile_reader as plugin
-from src.mobile_reader import FitbitMobileDashboardReader
+from src import plugin_ui_reader as plugin
+from src.plugin_ui_reader import FitbitPluginUiReader
 
 
 class Response:
@@ -78,7 +78,7 @@ def test_current_projection_only_reads_health_snapshot(
 
     monkeypatch.setattr(plugin.requests, "get", get)
     monkeypatch.setattr(plugin, "_MONITOR_URL", "http://monitor")
-    overview = FitbitMobileDashboardReader().get_current()
+    overview = FitbitPluginUiReader().get_current()
 
     assert calls == ["http://monitor/api/tool/fitbit_health_snapshot"]
     assert overview["freshness"] == {
@@ -110,9 +110,9 @@ def test_sleep_history_projection_only_reads_local_projection(
 
     monkeypatch.setattr(plugin.requests, "get", get)
     monkeypatch.setattr(plugin, "_MONITOR_URL", "http://monitor")
-    overview = FitbitMobileDashboardReader().get_sleep_history()
+    overview = FitbitPluginUiReader().get_sleep_history()
 
-    assert calls == [("http://monitor/api/mobile/sleep_projection", None)]
+    assert calls == [("http://monitor/api/fitbit/sleep_projection", None)]
     assert overview["sleep_days"] == [
         {
             "date": "2026-07-16",
@@ -148,7 +148,7 @@ def test_sleep_history_projects_missing_background_projection_as_a_panel_state(
         ),
     )
 
-    assert FitbitMobileDashboardReader().get_sleep_history() == {
+    assert FitbitPluginUiReader().get_sleep_history() == {
         "available": False,
         "reason": "projection_not_ready",
         "freshness": {"state": "missing", "age_seconds": None},
@@ -190,8 +190,8 @@ def test_malformed_current_payload_does_not_couple_sleep_history(
     monkeypatch.setattr(plugin.requests, "get", get)
 
     with pytest.raises(TypeError, match="返回非对象"):
-        FitbitMobileDashboardReader().get_current()
-    assert FitbitMobileDashboardReader().get_sleep_history()["sleep_summary"] == {
+        FitbitPluginUiReader().get_current()
+    assert FitbitPluginUiReader().get_sleep_history()["sleep_summary"] == {
         "days_with_data": 7,
         "avg_duration_min": 372.7,
         "avg_efficiency": 96.1,

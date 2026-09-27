@@ -4,14 +4,14 @@ from collections.abc import Mapping
 
 import requests
 
-from agent.plugin_composition import MobileUiRpcInvalidRequest
+from agent.plugin_composition import PluginUiRpcInvalidRequest
 
 
 _MONITOR_URL = "http://127.0.0.1:18765"
 
 
-class FitbitMobileDashboardReader:
-    """读取 monitor，并生成稳定的移动健康总览。"""
+class FitbitPluginUiReader:
+    """读取 monitor，并生成稳定的Web 健康总览。"""
 
     def get_current(self) -> dict[str, object]:
         snapshot = self._get_json("/api/tool/fitbit_health_snapshot")
@@ -33,7 +33,7 @@ class FitbitMobileDashboardReader:
         }
 
     def get_sleep_history(self) -> dict[str, object]:
-        report = self._get_json("/api/mobile/sleep_projection")
+        report = self._get_json("/api/fitbit/sleep_projection")
         if not _boolean(report, "available"):
             return {
                 "available": False,
@@ -76,7 +76,7 @@ class FitbitMobileDashboardReader:
         return payload
 
 
-def mobile_ui_query(
+def plugin_ui_query(
     method: str,
     payload: dict[str, object],
     *,
@@ -87,13 +87,13 @@ def mobile_ui_query(
 
     _ = payload, session_id, turn_id
     readers = {
-        "fitbit.current": FitbitMobileDashboardReader.get_current,
-        "fitbit.sleep_history": FitbitMobileDashboardReader.get_sleep_history,
+        "fitbit.current": FitbitPluginUiReader.get_current,
+        "fitbit.sleep_history": FitbitPluginUiReader.get_sleep_history,
     }
     reader_method = readers.get(method)
     if reader_method is None:
-        raise MobileUiRpcInvalidRequest(f"未知 fitbit 移动方法: {method}")
-    return reader_method(FitbitMobileDashboardReader())
+        raise PluginUiRpcInvalidRequest(f"未知 fitbit 插件界面方法: {method}")
+    return reader_method(FitbitPluginUiReader())
 
 
 def _sleep_segments(payload: Mapping[str, object]) -> list[dict[str, object]]:

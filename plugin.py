@@ -18,8 +18,8 @@ from agent.plugin_composition import (
     EndpointEnv,
     ManagedProcessDefinition,
     McpServerDefinition,
-    MobileUiDefinition,
-    MobileUiNavigation,
+    PluginUiDefinition,
+    PluginUiNavigation,
 )
 from agent.plugin_composition.ui import UI
 from .src.content_adapter import (
@@ -27,7 +27,7 @@ from .src.content_adapter import (
     FitbitMonitorClient,
 )
 from .src.eventmail import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
-from .src.mobile_reader import mobile_ui_query
+from .src.plugin_ui_reader import plugin_ui_query
 from .src.sleep_context import FitbitAdapterStore
 
 
@@ -60,7 +60,7 @@ inject = (
 
 
 async def apply(ctx: Context) -> None:
-    """装配 monitor、工具、Wake 来源和移动界面。"""
+    """装配 monitor、工具、Wake 来源和插件界面。"""
 
     config = FitbitConfig.model_validate(ctx.config)
     await ctx.require(UI).register(
@@ -150,16 +150,16 @@ async def apply(ctx: Context) -> None:
         name="fitbit-eventmail-source",
     )
 
-    # 3. 在同一个 exact Root 上保留现有移动投影
-    await ctx.require(UI_SLOTS).register_mobile(
+    # 3. 在同一个 Root 上注册 Web 插件界面投影。
+    await ctx.require(UI_SLOTS).register_plugin_ui(
         ctx,
-        MobileUiDefinition(
-            module="mobile_panel.js",
-            stylesheet="mobile_panel.css",
-            navigation=MobileUiNavigation(
+        PluginUiDefinition(
+            module="plugin_ui.js",
+            stylesheet="plugin_ui.css",
+            navigation=PluginUiNavigation(
                 label="健康状态",
                 description="查看当前心率、血氧、步数和最近睡眠节律",
             ),
         ),
-        query=mobile_ui_query,
+        query=plugin_ui_query,
     )

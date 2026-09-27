@@ -16,9 +16,9 @@ def _function(name: str) -> ast.FunctionDef:
     )
 
 
-def test_mobile_sleep_endpoint_cannot_reach_oauth_or_fitbit_http() -> None:
-    endpoint = _function("api_mobile_sleep_projection")
-    reader = _function("_read_mobile_sleep_projection")
+def test_sleep_projection_endpoint_cannot_reach_oauth_or_fitbit_http() -> None:
+    endpoint = _function("api_sleep_projection")
+    reader = _function("_read_sleep_projection")
     names = {
         node.id
         for function in (endpoint, reader)
@@ -46,7 +46,7 @@ def test_existing_background_recovery_fetch_owns_projection_refresh() -> None:
     ]
 
     assert calls.count("_build_sleep_report_payload") == 1
-    assert calls.count("_write_mobile_sleep_projection") == 1
+    assert calls.count("_write_sleep_projection") == 1
 
 
 def test_failed_sleep_fetch_cannot_replace_the_last_valid_projection() -> None:

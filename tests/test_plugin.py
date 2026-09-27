@@ -26,7 +26,7 @@ from agent.plugin_composition.process_slots import ManagedProcessDefinition
 from agent.plugin_composition.ui import DASHBOARD_ROUTES, UI
 from contextlib import asynccontextmanager
 from plugins.mcp.plugin import McpServers
-from plugins.ui.mobile import MobileUiSlots
+from plugins.ui.plugin_ui import PluginUiSlots
 from plugins.ui.plugin import Ui
 from agent.plugins.composable import ComposablePlugin
 from agent.plugins.static_manifest import load_static_plugin_manifest
@@ -36,8 +36,8 @@ from fitbit_test_plugin.src.eventmail import (  # pyright: ignore[reportMissingI
     EVENTMAIL_ALERT_SOURCE,
     EVENTMAIL_CONTEXT_SOURCE,
 )
-from src import mobile_reader
-from src.mobile_reader import mobile_ui_query
+from src import plugin_ui_reader
+from src.plugin_ui_reader import plugin_ui_query
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,13 +101,13 @@ def test_pure_v3_exports_and_exact_apply() -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
+async def test_apply_registers_wake_runtime_tools_and_plugin_ui(
     tmp_path: Path,
 ) -> None:
     root = CompositionRoot("fitbit:test")
     processes = _Processes()
     servers = McpServers(root.context)
-    ui_slots = MobileUiSlots(root.context)
+    ui_slots = PluginUiSlots(root.context)
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:test"))
@@ -139,23 +139,23 @@ async def test_apply_registers_wake_runtime_tools_and_mobile_ui(
     assert root.receipt().ready, root.receipt().incidents
     process = processes.definitions["monitor"]
     mcp = servers._entries["fitbit"].definition
-    mobile = ui_slots._registrations["fitbit"].descriptor
+    ui_binding = ui_slots._registrations["fitbit"].descriptor
     assert process.cwd == "."
     assert process.port_env == "FITBIT_MONITOR_PORT"
     assert mcp.required_tools == ("fitbit_health_snapshot", "fitbit_sleep_report")
     assert mcp.candidate_env == {"FITBIT_BACKEND": "recording"}
-    assert mobile.navigation_label == "健康状态"
+    assert ui_binding.navigation_label == "健康状态"
     assert data_dir.joinpath("adapter.sqlite3").is_file()
     assert any(item["name"].startswith("mcp_fitbit__") for item in (ref.description for ref in root.context.require(FITBIT_TOOLS).refs))
     await root.dispose()
 
 
 @pytest.mark.asyncio
-async def test_apply_keeps_tools_and_mobile_ui_without_eventmail(tmp_path: Path) -> None:
+async def test_apply_keeps_tools_and_plugin_ui_without_eventmail(tmp_path: Path) -> None:
     root = CompositionRoot("fitbit:without-eventmail")
     processes = _Processes()
     servers = McpServers(root.context)
-    ui_slots = MobileUiSlots(root.context)
+    ui_slots = PluginUiSlots(root.context)
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:without-eventmail"))

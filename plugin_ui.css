@@ -1,4 +1,4 @@
-.fitbit-mobile {
+.fitbit-ui {
   --fitbit-sleep: #aa8ee8;
   --fitbit-sleep-ink: #201136;
   --fitbit-heart: #ef9d99;
@@ -11,12 +11,12 @@
   font-synthesis: none;
 }
 
-.fitbit-mobile [hidden] {
+.fitbit-ui [hidden] {
   display: none !important;
 }
 
 @supports (color: oklch(0 0 0)) {
-  .fitbit-mobile {
+  .fitbit-ui {
     --fitbit-sleep: oklch(0.72 0.14 300);
     --fitbit-sleep-ink: oklch(0.22 0.07 300);
     --fitbit-heart: oklch(0.76 0.13 25);
@@ -28,7 +28,7 @@
   }
 }
 
-.fitbit-mobile-status {
+.fitbit-ui-status {
   display: grid;
   justify-items: start;
   gap: 12px;
@@ -38,11 +38,11 @@
   line-height: 1.5;
 }
 
-.fitbit-mobile-status.error {
+.fitbit-ui-status.error {
   color: var(--ak-color-status-error);
 }
 
-.fitbit-mobile-status button {
+.fitbit-ui-status button {
   min-height: 48px;
   border: 0;
   border-radius: var(--m-shape-full);
@@ -53,17 +53,17 @@
   font-weight: 600;
 }
 
-.fitbit-mobile-status button:active {
+.fitbit-ui-status button:active {
   scale: 0.96;
   background: var(--ak-color-action-hover);
 }
 
-.fitbit-mobile-status button:focus-visible {
+.fitbit-ui-status button:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--ak-color-action-primary) 35%, transparent);
   outline-offset: 2px;
 }
 
-.fitbit-mobile-freshness {
+.fitbit-ui-freshness {
   margin: 0 2px 10px;
   color: var(--ak-color-text-secondary);
   font-size: 0.75rem;
@@ -72,17 +72,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-.fitbit-mobile-freshness.is-stale {
+.fitbit-ui-freshness.is-stale {
   color: var(--ak-color-status-warning);
 }
 
-.fitbit-mobile-overview {
+.fitbit-ui-overview {
   display: grid;
   grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
   gap: 8px;
 }
 
-.fitbit-mobile-sleep {
+.fitbit-ui-sleep {
   display: flex;
   min-height: 184px;
   flex-direction: column;
@@ -93,14 +93,14 @@
   background: var(--fitbit-sleep);
 }
 
-.fitbit-mobile-sleep > span,
-.fitbit-mobile-sleep > small {
+.fitbit-ui-sleep > span,
+.fitbit-ui-sleep > small {
   font-size: 0.75rem;
   font-weight: 500;
   line-height: 1.35;
 }
 
-.fitbit-mobile-sleep > strong {
+.fitbit-ui-sleep > strong {
   margin: 9px 0;
   font-size: 2rem;
   font-weight: 650;
@@ -108,13 +108,13 @@
   line-height: 1;
 }
 
-.fitbit-mobile-metrics {
+.fitbit-ui-metrics {
   display: grid;
   gap: 8px;
   margin: 0;
 }
 
-.fitbit-mobile-metrics > div {
+.fitbit-ui-metrics > div {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -123,86 +123,86 @@
   padding: 11px 13px;
 }
 
-.fitbit-mobile-heart {
+.fitbit-ui-heart {
   color: var(--fitbit-heart-ink);
   background: var(--fitbit-heart);
 }
 
-.fitbit-mobile-oxygen {
+.fitbit-ui-oxygen {
   color: var(--fitbit-oxygen-ink);
   background: var(--fitbit-oxygen);
 }
 
-.fitbit-mobile-steps {
+.fitbit-ui-steps {
   color: var(--fitbit-steps-ink);
   background: var(--fitbit-steps);
 }
 
-.fitbit-mobile-metrics dt,
-.fitbit-mobile-metrics dd {
+.fitbit-ui-metrics dt,
+.fitbit-ui-metrics dd {
   margin: 0;
   line-height: 1.25;
 }
 
-.fitbit-mobile-metrics dt {
+.fitbit-ui-metrics dt {
   font-size: 0.6875rem;
   font-weight: 550;
 }
 
-.fitbit-mobile-metrics dd {
+.fitbit-ui-metrics dd {
   margin-top: 4px;
   font-size: 0.75rem;
   font-weight: 500;
   white-space: nowrap;
 }
 
-.fitbit-mobile-metrics strong {
+.fitbit-ui-metrics strong {
   font-size: 1.125rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.fitbit-mobile-oxygen small {
+.fitbit-ui-oxygen small {
   margin-top: 3px;
   font-size: 0.6875rem;
   font-weight: 550;
   line-height: 1.25;
 }
 
-.fitbit-mobile-oxygen small.is-stale {
+.fitbit-ui-oxygen small.is-stale {
   color: var(--ak-color-status-error);
   font-weight: 700;
 }
 
-.fitbit-mobile-rhythm,
-.fitbit-mobile-week {
+.fitbit-ui-rhythm,
+.fitbit-ui-week {
   margin-top: 24px;
 }
 
-.fitbit-mobile-rhythm > header,
-.fitbit-mobile-week > header {
+.fitbit-ui-rhythm > header,
+.fitbit-ui-week > header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   padding: 0 2px 9px;
 }
 
-.fitbit-mobile-rhythm h2,
-.fitbit-mobile-week h2 {
+.fitbit-ui-rhythm h2,
+.fitbit-ui-week h2 {
   margin: 0;
   font-size: 1rem;
   font-weight: 550;
   line-height: 1.25;
 }
 
-.fitbit-mobile-rhythm header span,
-.fitbit-mobile-week header span {
+.fitbit-ui-rhythm header span,
+.fitbit-ui-week header span {
   color: var(--ak-color-text-secondary);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
 }
 
-.fitbit-mobile-timeline {
+.fitbit-ui-timeline {
   display: flex;
   height: 18px;
   overflow: hidden;
@@ -210,19 +210,19 @@
   background: var(--ak-color-bg-surface);
 }
 
-.fitbit-mobile-timeline > .sleeping {
+.fitbit-ui-timeline > .sleeping {
   background: var(--fitbit-sleep);
 }
 
-.fitbit-mobile-timeline > .awake {
+.fitbit-ui-timeline > .awake {
   background: var(--ak-color-bg-surface-high);
 }
 
-.fitbit-mobile-timeline > .unknown {
+.fitbit-ui-timeline > .unknown {
   background: var(--ak-color-bg-surface);
 }
 
-.fitbit-mobile-empty {
+.fitbit-ui-empty {
   margin: 0;
   padding: 14px 2px;
   color: var(--ak-color-text-secondary);
@@ -230,7 +230,7 @@
   line-height: 1.45;
 }
 
-.fitbit-mobile-week-summary {
+.fitbit-ui-week-summary {
   margin: 0 2px 8px;
   color: var(--fitbit-sleep-ink);
   font-size: 0.8125rem;
@@ -239,17 +239,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-.fitbit-mobile-week-summary.is-stale {
+.fitbit-ui-week-summary.is-stale {
   color: var(--ak-color-status-warning);
 }
 
-.fitbit-mobile-days {
+.fitbit-ui-days {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.fitbit-mobile-day {
+.fitbit-ui-day {
   display: grid;
   min-height: 68px;
   grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
@@ -259,7 +259,7 @@
   padding: 10px 2px;
 }
 
-.fitbit-mobile-day time {
+.fitbit-ui-day time {
   grid-row: 1 / 3;
   align-self: center;
   color: var(--ak-color-text-secondary);
@@ -268,14 +268,14 @@
   font-variant-numeric: tabular-nums;
 }
 
-.fitbit-mobile-day strong {
+.fitbit-ui-day strong {
   font-size: 0.875rem;
   font-weight: 600;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
 }
 
-.fitbit-mobile-day span {
+.fitbit-ui-day span {
   color: var(--ak-color-text-secondary);
   font-size: 0.6875rem;
   line-height: 1.35;

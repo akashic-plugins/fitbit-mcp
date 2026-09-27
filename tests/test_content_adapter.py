@@ -102,14 +102,15 @@ def _runtime(
     )
 
 
-def test_health_reports_alert_and_sleep_reports_expiring_context(
+@pytest.mark.asyncio
+async def test_health_reports_alert_and_sleep_reports_expiring_context(
     tmp_path: Path,
 ) -> None:
     alerts = RecordingAlerts()
     context = RecordingContext()
     runtime, store = _runtime(tmp_path, alerts, context, RecordingMonitor())
 
-    runtime.tick()
+    await runtime.tick()
 
     assert alerts.reports[0]["event_id"] == "fitbit:event-1"
     assert context.reports == [
@@ -124,7 +125,8 @@ def test_health_reports_alert_and_sleep_reports_expiring_context(
 
 
 @pytest.mark.parametrize("status", ["delivered", "skipped", "expired"])
-def test_terminal_alert_is_acknowledged_instead_of_reported(
+@pytest.mark.asyncio
+async def test_terminal_alert_is_acknowledged_instead_of_reported(
     tmp_path: Path, status: str
 ) -> None:
     alerts = RecordingAlerts()
@@ -133,14 +135,15 @@ def test_terminal_alert_is_acknowledged_instead_of_reported(
     monitor = RecordingMonitor()
     runtime, _ = _runtime(tmp_path, alerts, context, monitor)
 
-    runtime.tick()
+    await runtime.tick()
 
     assert monitor.acknowledged == ["fitbit:event-1"]
     assert alerts.reports == []
     assert len(context.reports) == 1
 
 
-def test_revised_alert_replaces_pending_payload_and_acks_once(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_revised_alert_replaces_pending_payload_and_acks_once(tmp_path: Path) -> None:
     class RevisedMonitor(RecordingMonitor):
         def __init__(self) -> None:
             super().__init__()
@@ -153,7 +156,7 @@ def test_revised_alert_replaces_pending_payload_and_acks_once(tmp_path: Path) ->
     context = RecordingContext()
     monitor = RevisedMonitor()
     runtime, _ = _runtime(tmp_path, alerts, context, monitor)
-    runtime.tick()
+    await runtime.tick()
     revised = {
         **SNAPSHOT,
         "health_events": [
@@ -162,14 +165,14 @@ def test_revised_alert_replaces_pending_payload_and_acks_once(tmp_path: Path) ->
         ],
     }
     monitor.current = revised
-    runtime.tick()
+    await runtime.tick()
 
     assert [report["event_id"] for report in alerts.reports] == [
         "fitbit:event-1",
         "fitbit:event-1",
     ]
     alerts.statuses["fitbit:event-1"] = "delivered"
-    runtime.tick()
+    await runtime.tick()
     assert monitor.acknowledged == ["fitbit:event-1"]
 
 

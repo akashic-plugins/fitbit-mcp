@@ -5,9 +5,11 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import cast
 
 import pytest
 from agent.plugin_composition import MANAGED_PROCESSES, MCP_SERVERS, UI_SLOTS
+from agent.plugins.composable import ComposablePlugin
 from agent.plugins.selection import PluginSelection
 from session.log import MessageLog
 from agent.plugins.manager import PluginManager
@@ -15,6 +17,8 @@ from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironment
 from agent.plugins.static_manifest import load_static_plugin_manifest
 from bus.event_bus import EventBus
 from plugins.content import plugin as content_plugin
+from plugins.managed_processes.plugin import ManagedProcesses
+from plugins.mcp.plugin import McpServers
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,10 +143,11 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
         old = manager.generation("fitbit")
         assert old is not None and old.fiber is not None
         assert root.context.get(UI_SLOTS) is not None
-        assert root.context.require(MCP_SERVERS)._entries["fitbit"].definition.required_tools == (
+        mcp_servers = cast(McpServers, root.context.require(MCP_SERVERS))
+        assert mcp_servers._entries["fitbit"].definition.required_tools == (
             "fitbit_health_snapshot", "fitbit_sleep_report",
         )
-        processes = root.context.require(MANAGED_PROCESSES)
+        processes = cast(ManagedProcesses, root.context.require(MANAGED_PROCESSES))
         monitor = processes._entries[("fitbit", "monitor")]
         assert monitor._host.endpoint(monitor._id, "monitor").port == 18765
 
@@ -163,12 +168,14 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
         assert manager.live_root is root
         new = manager.generation("fitbit")
         assert new is not None and new is not old and new.fiber is not None
-        assert new.instance is not None and new.instance.version == "3.2.5"
+        assert cast(ComposablePlugin, new.instance).version == "3.2.5"
         assert marker.read_text(encoding="utf-8") == "keep this data"
-        assert root.context.require(MCP_SERVERS)._entries["fitbit"].definition.required_tools == (
+        mcp_servers = cast(McpServers, root.context.require(MCP_SERVERS))
+        assert mcp_servers._entries["fitbit"].definition.required_tools == (
             "fitbit_health_snapshot", "fitbit_sleep_report",
         )
-        monitor = root.context.require(MANAGED_PROCESSES)._entries[("fitbit", "monitor")]
+        processes = cast(ManagedProcesses, root.context.require(MANAGED_PROCESSES))
+        monitor = processes._entries[("fitbit", "monitor")]
         assert monitor._host.endpoint(monitor._id, "monitor").port == 18765
     finally:
         await manager.terminate_all()

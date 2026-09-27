@@ -60,7 +60,7 @@ function dayLabel(value) {
 
 function sleepDayRow(item) {
   const row = document.createElement("li");
-  row.className = "fitbit-mobile-day";
+  row.className = "fitbit-ui-day";
   const date = document.createElement("time");
   date.dateTime = String(item.date || "");
   date.textContent = dayLabel(item.date);
@@ -109,45 +109,45 @@ function errorMessage(error, fallback) {
 const dashboard = {
   mount(host, context) {
     let active = true;
-    host.classList.add("fitbit-mobile");
+    host.classList.add("fitbit-ui");
     host.innerHTML = `
-      <div class="fitbit-mobile-status" data-status="current" role="status">
+      <div class="fitbit-ui-status" data-status="current" role="status">
         <span>正在读取当前健康状态…</span>
         <button type="button" hidden>重试当前状态</button>
       </div>
-      <div class="fitbit-mobile-current" hidden>
-        <p class="fitbit-mobile-freshness"></p>
-        <section class="fitbit-mobile-overview" aria-label="当前健康状态">
-          <div class="fitbit-mobile-sleep">
+      <div class="fitbit-ui-current" hidden>
+        <p class="fitbit-ui-freshness"></p>
+        <section class="fitbit-ui-overview" aria-label="当前健康状态">
+          <div class="fitbit-ui-sleep">
             <span>当前状态</span>
             <strong data-current="sleep">等待数据</strong>
             <small data-current="probability"></small>
           </div>
-          <dl class="fitbit-mobile-metrics">
-            <div class="fitbit-mobile-heart"><dt>心率</dt><dd><strong data-current="heart">—</strong> bpm</dd></div>
-            <div class="fitbit-mobile-oxygen">
+          <dl class="fitbit-ui-metrics">
+            <div class="fitbit-ui-heart"><dt>心率</dt><dd><strong data-current="heart">—</strong> bpm</dd></div>
+            <div class="fitbit-ui-oxygen">
               <dt>血氧</dt><dd><strong data-current="oxygen">—</strong>%</dd>
               <small data-current="oxygen-freshness"></small>
             </div>
-            <div class="fitbit-mobile-steps"><dt>步数</dt><dd><strong data-current="steps">—</strong> 步</dd></div>
+            <div class="fitbit-ui-steps"><dt>步数</dt><dd><strong data-current="steps">—</strong> 步</dd></div>
           </dl>
         </section>
-        <section class="fitbit-mobile-rhythm" aria-labelledby="fitbit-rhythm-title">
+        <section class="fitbit-ui-rhythm" aria-labelledby="fitbit-rhythm-title">
           <header><h2 id="fitbit-rhythm-title">最近 24 小时</h2><span>紫色为睡眠</span></header>
-          <p class="fitbit-mobile-empty" data-empty="rhythm" hidden>暂无可用睡眠节律</p>
-          <div class="fitbit-mobile-timeline" role="img"></div>
+          <p class="fitbit-ui-empty" data-empty="rhythm" hidden>暂无可用睡眠节律</p>
+          <div class="fitbit-ui-timeline" role="img"></div>
         </section>
       </div>
-      <section class="fitbit-mobile-week" aria-labelledby="fitbit-week-title">
+      <section class="fitbit-ui-week" aria-labelledby="fitbit-week-title">
         <header><h2 id="fitbit-week-title">7 天睡眠</h2><span data-week="coverage"></span></header>
-        <div class="fitbit-mobile-status" data-status="history" role="status">
+        <div class="fitbit-ui-status" data-status="history" role="status">
           <span>正在读取睡眠历史…</span>
           <button type="button" hidden>重试睡眠历史</button>
         </div>
-        <div class="fitbit-mobile-history" hidden>
-          <p class="fitbit-mobile-week-summary"></p>
-          <p class="fitbit-mobile-empty" data-empty="history" hidden>最近 7 天没有可用睡眠记录</p>
-          <ul class="fitbit-mobile-days"></ul>
+        <div class="fitbit-ui-history" hidden>
+          <p class="fitbit-ui-week-summary"></p>
+          <p class="fitbit-ui-empty" data-empty="history" hidden>最近 7 天没有可用睡眠记录</p>
+          <ul class="fitbit-ui-days"></ul>
         </div>
       </section>`;
 
@@ -155,8 +155,8 @@ const dashboard = {
     const historyStatus = host.querySelector('[data-status="history"]');
     const currentRetry = currentStatus.querySelector("button");
     const historyRetry = historyStatus.querySelector("button");
-    const currentContent = host.querySelector(".fitbit-mobile-current");
-    const historyContent = host.querySelector(".fitbit-mobile-history");
+    const currentContent = host.querySelector(".fitbit-ui-current");
+    const historyContent = host.querySelector(".fitbit-ui-history");
 
     const loadCurrent = () => {
       setStatus(currentStatus, "正在读取当前健康状态…");
@@ -164,7 +164,7 @@ const dashboard = {
         if (!active) return;
         const freshness = overview.freshness || {};
         const current = overview.current || {};
-        const freshnessNode = host.querySelector(".fitbit-mobile-freshness");
+        const freshnessNode = host.querySelector(".fitbit-ui-freshness");
         freshnessNode.textContent = overallFreshnessLabel(freshness);
         freshnessNode.classList.toggle("is-stale", Number(freshness.data_lag_min) > 15);
         host.querySelector('[data-current="sleep"]').textContent = sleepStateLabel(current.sleep_state);
@@ -178,7 +178,7 @@ const dashboard = {
         oxygenFreshness.textContent = lagLabel(freshness.spo2_lag_min, "血氧");
         oxygenFreshness.classList.toggle("is-stale", Number(freshness.spo2_lag_min) > 15);
 
-        const timeline = host.querySelector(".fitbit-mobile-timeline");
+        const timeline = host.querySelector(".fitbit-ui-timeline");
         const rawSegments = Array.isArray(overview.sleep_24h) ? overview.sleep_24h : [];
         const segments = normalizeTimeline(rawSegments);
         timeline.replaceChildren(...segments.map(rhythmSegment));
@@ -205,7 +205,7 @@ const dashboard = {
         const summary = overview.sleep_summary || {};
         const freshness = overview.freshness || {};
         host.querySelector('[data-week="coverage"]').textContent = `${number(summary.days_with_data)} / 7 天有数据`;
-        const summaryNode = host.querySelector(".fitbit-mobile-week-summary");
+        const summaryNode = host.querySelector(".fitbit-ui-week-summary");
         const summaryParts = [
           `平均 ${durationLabel(summary.avg_duration_min)}`,
           `效率 ${number(summary.avg_efficiency)}%`,
@@ -215,7 +215,7 @@ const dashboard = {
         summaryNode.textContent = summaryParts.join(" · ");
         summaryNode.classList.toggle("is-stale", freshness.state === "stale");
         const days = Array.isArray(overview.sleep_days) ? overview.sleep_days : [];
-        host.querySelector(".fitbit-mobile-days").replaceChildren(...days.map(sleepDayRow));
+        host.querySelector(".fitbit-ui-days").replaceChildren(...days.map(sleepDayRow));
         host.querySelector('[data-empty="history"]').hidden = days.length !== 0;
         historyStatus.hidden = true;
         historyContent.hidden = false;
@@ -233,7 +233,7 @@ const dashboard = {
       active = false;
       currentRetry.removeEventListener("click", loadCurrent);
       historyRetry.removeEventListener("click", loadHistory);
-      host.classList.remove("fitbit-mobile");
+      host.classList.remove("fitbit-ui");
     };
   },
 };
