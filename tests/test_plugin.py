@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import shutil
 from pathlib import Path
 from typing import cast
 
@@ -190,8 +191,18 @@ async def test_apply_keeps_tools_and_plugin_ui_without_eventmail(tmp_path: Path)
     await root.dispose()
 
 
-def test_static_manifest_freezes_runtime_and_candidate_exclusions() -> None:
-    manifest = load_static_plugin_manifest(ROOT)
+def test_static_manifest_freezes_runtime_and_candidate_exclusions(tmp_path: Path) -> None:
+    # CI 在仓库中签出 Core；只核对实际安装制品的 requirements。
+    artifact = tmp_path / "fitbit"
+    shutil.copytree(
+        ROOT,
+        artifact,
+        ignore=shutil.ignore_patterns(
+            ".git", ".akashic-core", ".venv", "node_modules", "__pycache__",
+            ".pytest_cache",
+        ),
+    )
+    manifest = load_static_plugin_manifest(artifact)
     assert manifest.name == "fitbit"
     assert manifest.version == "3.2.4"
     assert manifest.requirements == ("requirements.txt",)
