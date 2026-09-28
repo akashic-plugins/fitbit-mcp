@@ -4,8 +4,8 @@ import test from "node:test";
 
 import { parseHTML } from "linkedom";
 
-const source = await readFile(new URL("../mobile_panel.js", import.meta.url), "utf8");
-const styles = await readFile(new URL("../mobile_panel.css", import.meta.url), "utf8");
+const source = await readFile(new URL("../plugin_ui.js", import.meta.url), "utf8");
+const styles = await readFile(new URL("../plugin_ui.css", import.meta.url), "utf8");
 const panel = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 
 const current = {
@@ -27,7 +27,7 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-test("mobile navigation describes the health task", () => {
+test("plugin UI navigation describes the health task", () => {
   assert.equal(panel.default.navigation, undefined);
   assert.equal(typeof panel.default.dashboard.mount, "function");
 });
@@ -85,9 +85,9 @@ test("current health survives history failure and retries only history", async (
   assert.equal(host.querySelector('[data-current="heart"]').textContent, "72");
   assert.equal(host.querySelector('[data-current="oxygen-freshness"]').textContent, "血氧延迟 99 分钟");
   assert.equal(host.querySelector('[data-current="oxygen-freshness"]').classList.contains("is-stale"), true);
-  assert.equal(host.querySelector(".fitbit-mobile-timeline .unknown") !== null, true);
-  assert.match(host.querySelector(".fitbit-mobile-timeline").getAttribute("aria-label"), /无数据 13 小时/);
-  assert.equal(host.querySelector(".fitbit-mobile-timeline span").getAttribute("aria-hidden"), "true");
+  assert.equal(host.querySelector(".fitbit-ui-timeline .unknown") !== null, true);
+  assert.match(host.querySelector(".fitbit-ui-timeline").getAttribute("aria-label"), /无数据 13 小时/);
+  assert.equal(host.querySelector(".fitbit-ui-timeline span").getAttribute("aria-hidden"), "true");
   const historyStatus = host.querySelector('[data-status="history"]');
   assert.match(historyStatus.textContent, /睡眠历史读取失败：401/);
   assert.equal(historyStatus.querySelector("button").hidden, false);
@@ -96,10 +96,10 @@ test("current health survives history failure and retries only history", async (
   await flush();
   assert.deepEqual(calls, ["fitbit.current", "fitbit.sleep_history", "fitbit.sleep_history"]);
   assert.equal(host.querySelector('[data-current="heart"]').textContent, "72");
-  assert.match(host.querySelector(".fitbit-mobile-week-summary").textContent, /平均 6 小时 13 分/);
-  assert.equal(host.querySelectorAll(".fitbit-mobile-day").length, 1);
+  assert.match(host.querySelector(".fitbit-ui-week-summary").textContent, /平均 6 小时 13 分/);
+  assert.equal(host.querySelectorAll(".fitbit-ui-day").length, 1);
   unmount();
-  assert.equal(host.classList.contains("fitbit-mobile"), false);
+  assert.equal(host.classList.contains("fitbit-ui"), false);
 });
 
 test("sleep history survives current failure", async () => {
@@ -117,8 +117,8 @@ test("sleep history survives current failure", async () => {
 
   await flush();
   assert.match(host.querySelector('[data-status="current"]').textContent, /当前健康状态读取失败/);
-  assert.equal(host.querySelectorAll(".fitbit-mobile-day").length, 1);
-  assert.match(host.querySelector(".fitbit-mobile-week-summary").textContent, /效率 96%/);
+  assert.equal(host.querySelectorAll(".fitbit-ui-day").length, 1);
+  assert.match(host.querySelector(".fitbit-ui-week-summary").textContent, /效率 96%/);
 });
 
 test("missing background projection stays inside the health panel", async () => {
@@ -155,10 +155,10 @@ test("stale sleep projection remains visible with an explicit freshness label", 
   });
 
   await flush();
-  const summary = host.querySelector(".fitbit-mobile-week-summary");
+  const summary = host.querySelector(".fitbit-ui-week-summary");
   assert.match(summary.textContent, /后台数据待刷新/);
   assert.equal(summary.classList.contains("is-stale"), true);
-  assert.equal(host.querySelectorAll(".fitbit-mobile-day").length, 1);
+  assert.equal(host.querySelectorAll(".fitbit-ui-day").length, 1);
 });
 
 test("pending requests cannot mutate the panel after unmount", async () => {
@@ -179,7 +179,7 @@ test("pending requests cannot mutate the panel after unmount", async () => {
   await flush();
 
   assert.equal(host.innerHTML, before);
-  assert.equal(host.classList.contains("fitbit-mobile"), false);
+  assert.equal(host.classList.contains("fitbit-ui"), false);
 });
 
 test("plugin owns a task-first panel without copying the desktop dashboard", () => {
@@ -189,7 +189,7 @@ test("plugin owns a task-first panel without copying the desktop dashboard", () 
   assert.match(source, /fitbit\.sleep_history/);
   assert.doesNotMatch(source, /fitbit\.overview/);
   assert.doesNotMatch(source, /window\.AkashicDashboard/);
-  assert.match(styles, /\.fitbit-mobile \[hidden\][\s\S]*display: none !important/);
+  assert.match(styles, /\.fitbit-ui \[hidden\][\s\S]*display: none !important/);
   assert.doesNotMatch(styles, /linear-gradient|box-shadow|backdrop-filter/);
 });
 
@@ -199,5 +199,5 @@ test("domain colors use oklch and lists stay on the page plane", () => {
   assert.match(styles, /--fitbit-steps: oklch/);
   assert.match(styles, /--fitbit-sleep: oklch/);
   assert.match(styles, /--fitbit-sleep-ink: oklch\(0\.22/);
-  assert.match(styles, /\.fitbit-mobile-day[\s\S]*border-bottom/);
+  assert.match(styles, /\.fitbit-ui-day[\s\S]*border-bottom/);
 });

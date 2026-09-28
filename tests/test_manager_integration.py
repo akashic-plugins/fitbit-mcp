@@ -5,26 +5,38 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import cast
 
 import pytest
-from agent.plugins.generation import PluginGeneration
+from agent.plugin_composition import MANAGED_PROCESSES, MCP_SERVERS, UI_SLOTS
+from agent.plugins.composable import ComposablePlugin
+from agent.plugins.selection import PluginSelection
 from session.log import MessageLog
 from agent.plugins.manager import PluginManager
 from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironments
 from agent.plugins.static_manifest import load_static_plugin_manifest
-from agent.plugins.snapshot import RuntimeSnapshot
 from bus.event_bus import EventBus
 from plugins.content import plugin as content_plugin
+from plugins.managed_processes.plugin import ManagedProcesses
+from plugins.mcp.plugin import McpServers
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _tree_files(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
 def _tree_digest(root: Path) -> str:
     digest = hashlib.sha256()
-    for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(path.read_bytes())
+    for name, value in sorted(_tree_files(root).items()):
+        digest.update(name.encode())
+        digest.update(value.encode())
     return digest.hexdigest()
 
 
@@ -47,8 +59,10 @@ def _stage_plugin(tmp_path: Path) -> Path:
     )
     (source / ".venv").symlink_to(fixture_python.parent.parent, target_is_directory=True)
     content_source = Path(content_plugin.__file__).resolve().parent
-    content_target = source.parent / "content"
-    shutil.copytree(content_source, content_target)
+    shutil.copytree(content_source, source.parent / "eventmail")
+    core_plugins = Path(os.environ["AKASHIC_AGENT_ROOT"]) / "plugins"
+    for provider in ("content", "mcp", "managed_processes", "tools", "ui"):
+        shutil.copytree(core_plugins / provider, source.parent / provider)
     return source
 
 
@@ -103,115 +117,69 @@ def test_ci_creates_and_exports_absolute_fixture_python_before_pytest() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manager_rebuilds_fitbit_runtime_on_exact_formal_root(
+async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证 formal boot 与 candidate 重建共享声明而不共享 Root owner。"""
+    """Load the real artifact, replace its owner, and keep the data directory."""
 
-    # 1. 正式启动真实 monitor/MCP handshake，但不调用 Fitbit 外部 API。
     plugin_root = _stage_plugin(tmp_path)
     workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    PluginSelection(workspace).initialize()
     _prepare_python_environment(plugin_root, workspace)
     log = MessageLog(tmp_path / "sessions.db")
     manager = PluginManager(
         message_log=log,
-        plugin_dirs=[plugin_root.parent, Path(os.environ["AKASHIC_AGENT_ROOT"]) / "plugins" / "tools"],
+        plugin_dirs=[plugin_root.parent],
         event_bus=EventBus(),
-        tool_registry=None,
         workspace=workspace,
         installed_cache_root=tmp_path / "home" / "cache",
     )
-    stable_snapshot = None
-    validation_root = None
+    root = None
     try:
         await manager.load_all()
-        stable_snapshot = manager.current_snapshot
-        assert stable_snapshot is not None
-        assert stable_snapshot.composition_root is not None
-        assert stable_snapshot.mcp_server_registry is not None
-        assert stable_snapshot.managed_process_registry is not None
-        assert stable_snapshot.mobile_ui_registry is not None
-        stable_generation = stable_snapshot.generations["fitbit"]
-        stable_runtime = manager.composition_generation_host.get(
-            stable_generation.generation_id
+        root = manager.live_root
+        assert root is not None
+        old = manager.generation("fitbit")
+        assert old is not None and old.fiber is not None
+        assert root.context.get(UI_SLOTS) is not None
+        mcp_servers = cast(McpServers, root.context.require(MCP_SERVERS))
+        assert mcp_servers._entries["fitbit"].definition.required_tools == (
+            "fitbit_health_snapshot", "fitbit_sleep_report",
         )
-        assert stable_runtime is not None and stable_runtime.mode == "formal"
-        assert stable_runtime.processes is not None
-        assert stable_runtime.processes.endpoint("monitor").port == 18765
-        assert stable_runtime.mcp is not None
-        stable_route = stable_runtime.mcp.server("fitbit").route()
-        await stable_route.aclose()
-        formal_data = tmp_path / "workspace/plugin-data/fitbit-builtin"
-        formal_digest = _tree_digest(formal_data)
+        processes = cast(ManagedProcesses, root.context.require(MANAGED_PROCESSES))
+        monitor = processes._entries[("fitbit", "monitor")]
+        assert monitor._host.endpoint(monitor._id, "monitor").port == 18765
 
-        # 2. 新版本先在隔离 Root 中验证，再重建 formal Root。
-        for relative in ("plugin.py", "akashic.plugin.toml"):
-            path = plugin_root / relative
-            path.write_text(
-                path.read_text(encoding="utf-8").replace("3.2.1", "3.2.2"),
-                encoding="utf-8",
-            )
+        data_dir = workspace / "plugin-data" / "fitbit-builtin"
+        marker = data_dir / "retained-test-data.txt"
+        marker.write_text("keep this data", encoding="utf-8")
+        plugin_path = plugin_root / "plugin.py"
+        plugin_path.write_text(
+            plugin_path.read_text(encoding="utf-8").replace("3.2.4", "3.2.5"),
+            encoding="utf-8",
+        )
         _prepare_python_environment(plugin_root, workspace)
-        candidate = await manager.prepare_candidate("fitbit")
-        assert candidate is not None and candidate.runtime_snapshot is not None
-        assert candidate.validation_workspace is not None
-        validation_root = candidate.validation_workspace.parent
-        candidate_snapshot = candidate.runtime_snapshot
-        assert candidate_snapshot.composition_root is not None
-        # EventMail is optional in this composition; the candidate keeps the
-        # dormant source pending until that provider is installed.
-        assert candidate_snapshot.composition_root.receipt().optional_pending == (
-            "fitbit-eventmail-source",
+        result = next(
+            item for item in await manager.reconcile_changed()
+            if item["plugin_id"] == "fitbit"
         )
-        assert candidate.validation_workspace != tmp_path / "workspace"
-        assert _tree_digest(formal_data) == formal_digest
-        original_invariants = manager._post_publish_invariants  # pyright: ignore[reportPrivateUsage]
-        candidate_checked = False
-
-        async def inspect_candidate_runtime(
-            generation: PluginGeneration,
-            snapshot: RuntimeSnapshot,
-        ) -> None:
-            nonlocal candidate_checked
-            candidate_runtime = manager.composition_generation_host.get(
-                generation.generation_id
-            )
-            assert candidate_runtime is not None
-            assert candidate_runtime.mode == "candidate"
-            assert candidate_runtime.mcp is not None
-            assert candidate_runtime.processes is not None
-            candidate_port = candidate_runtime.processes.endpoint("monitor").port
-            assert candidate_port != 18765
-            candidate_server = candidate_runtime.mcp.server("fitbit")
-            assert set(candidate_server.tool_names) == {
-                "fitbit_health_snapshot",
-                "fitbit_sleep_report",
-            }
-            async with candidate_server.route() as candidate_route:
-                result = await candidate_route.call("fitbit_health_snapshot", {})
-                assert result.success
-                assert '"available"' in result.output
-            candidate_checked = True
-            await original_invariants(generation, snapshot)
-
-        monkeypatch.setattr(
-            manager,
-            "_post_publish_invariants",
-            inspect_candidate_runtime,
+        assert result["publication_state"] == "active"
+        assert manager.live_root is root
+        new = manager.generation("fitbit")
+        assert new is not None and new is not old and new.fiber is not None
+        assert cast(ComposablePlugin, new.instance).version == "3.2.5"
+        assert marker.read_text(encoding="utf-8") == "keep this data"
+        mcp_servers = cast(McpServers, root.context.require(MCP_SERVERS))
+        assert mcp_servers._entries["fitbit"].definition.required_tools == (
+            "fitbit_health_snapshot", "fitbit_sleep_report",
         )
-        result = await manager.publish_prepared("fitbit")
-        assert result["publication_state"] == "committed"
-        assert candidate_checked
-        final_snapshot = manager.current_snapshot
-        assert final_snapshot is not None and final_snapshot.composition_root is not None
-        assert final_snapshot.composition_root is not candidate_snapshot.composition_root
-        assert not validation_root.exists()
+        processes = cast(ManagedProcesses, root.context.require(MANAGED_PROCESSES))
+        monitor = processes._entries[("fitbit", "monitor")]
+        assert monitor._host.endpoint(monitor._id, "monitor").port == 18765
     finally:
         await manager.terminate_all()
         log.close()
-
-    # 3. Manager 终止后进程、MCP 与 Root effects 全部归零。
-    assert stable_snapshot is not None and stable_snapshot.composition_root is not None
-    assert stable_snapshot.composition_root.receipt().effects == ()
-    assert stable_snapshot.composition_root.topology_view().listeners == ()
+    assert root is not None
+    assert root.receipt().effects == ()
+    assert root.topology_view().listeners == ()

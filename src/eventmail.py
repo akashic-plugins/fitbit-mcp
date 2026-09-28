@@ -8,6 +8,8 @@ from agent.plugin_composition import ServiceKey
 
 
 class BoundAlertSource(Protocol):
+    def close(self) -> None: ...
+
     def report(
         self,
         *,
@@ -25,6 +27,8 @@ class AlertSourceServices(Protocol):
 
 
 class BoundContextSource(Protocol):
+    def close(self) -> None: ...
+
     def report(
         self,
         *,

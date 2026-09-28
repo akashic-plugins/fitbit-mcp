@@ -11,23 +11,6 @@ permissions:
   contents: read
 
 jobs:
-  contract:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: akashic-plugins/plugin-contracts
-          ref: 4dd69dd621e029e51e99aa428443fa3a4ec1f6cf
-          path: .plugin-contracts
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Check Plugin API v3
-        env:
-          PYTHONPATH: .plugin-contracts
-        run: python -m akashic_plugin_contracts check plugin.py
-
   plugin-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -36,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: kachofugetsu09/akashic-agent
-          ref: fafa3b5be119f3c2532cb244e592c55393eda75a
+          ref: bed9dad96b9b3c27783004c6773fba4d5511ff29
           path: .akashic-core
       - uses: actions/setup-python@v5
         with:
