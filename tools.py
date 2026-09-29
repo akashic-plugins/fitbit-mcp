@@ -66,5 +66,4 @@ async def _register_tool(ctx: Context, item: dict) -> ToolRef:
         parameters=item["parameters"],
         open=open_tool,
         idempotent=item["read_only"],
-        risk="read-only" if item["read_only"] else "read-write",
     )

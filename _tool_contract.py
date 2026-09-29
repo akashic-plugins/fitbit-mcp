@@ -83,8 +83,6 @@ class ToolCatalog(Protocol):
         capture: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None,
         public: bool = True,
         idempotent: bool = False,
-        risk: Literal["read-only", "read-write", "external-side-effect"] = "read-write",
-        search_hint: str | None = None,
     ) -> ToolRef: ...
 
     def view(self, *refs: ToolRef) -> ToolView: ...
