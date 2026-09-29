@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from agent.plugin_composition import Context, ServiceKey
 from agent.plugin_contracts import CallRef, ContentPart, Message
@@ -106,8 +106,10 @@ class McpRoute(Protocol):
 
     async def call(
         self,
-        name: str,
-        arguments: Mapping[str, object],
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        *,
+        timeout: float | None = None,
     ) -> McpCallResult: ...
 
     async def __aenter__(self) -> McpRoute: ...
