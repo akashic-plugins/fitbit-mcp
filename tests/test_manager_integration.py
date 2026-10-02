@@ -16,7 +16,7 @@ from agent.plugins.manager import PluginManager
 from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironments
 from agent.plugins.static_manifest import load_static_plugin_manifest
 from bus.event_bus import EventBus
-from plugins.content import plugin as content_plugin
+from plugins.eventmail import plugin as eventmail_plugin
 from plugins.managed_processes.plugin import ManagedProcesses
 from plugins.mcp.plugin import McpServers
 
@@ -58,7 +58,7 @@ def _stage_plugin(tmp_path: Path) -> Path:
         ),
     )
     (source / ".venv").symlink_to(fixture_python.parent.parent, target_is_directory=True)
-    content_source = Path(content_plugin.__file__).resolve().parent
+    content_source = Path(eventmail_plugin.__file__).resolve().parent
     shutil.copytree(content_source, source.parent / "eventmail")
     core_plugins = Path(os.environ["AKASHIC_AGENT_ROOT"]) / "plugins"
     for provider in ("content", "mcp", "managed_processes", "tools", "ui"):

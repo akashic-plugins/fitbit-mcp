@@ -147,7 +147,7 @@ class FitbitWakeRuntime:
         now = _aware(self._now())
         for item in items:
             event_id = str(item["item_id"])
-            status = self._alerts.status(
+            status = await self._alerts.status(
                 event_id=event_id,
             )
             if status in {"delivered", "skipped", "expired"}:
@@ -155,7 +155,7 @@ class FitbitWakeRuntime:
                 if self._after_provider_ack is not None:
                     self._after_provider_ack()
                 continue
-            _ = self._alerts.report(
+            _ = await self._alerts.report(
                 event_id=event_id,
                 payload=_mapping(item, "payload"),
                 observed_at=now,
@@ -164,7 +164,7 @@ class FitbitWakeRuntime:
         # 2. 睡眠状态是可覆盖、会过期的 Context，不参与 Content 初筛。
         sleep = normalize_sleep(snapshot)
         expires_at = now + self._sleep_ttl
-        _ = self._context.report(
+        _ = await self._context.report(
             event_id="current",
             payload=sleep,
             observed_at=now,

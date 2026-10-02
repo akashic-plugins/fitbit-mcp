@@ -62,11 +62,11 @@ class RecordingAlerts:
         self.reports: list[dict[str, object]] = []
         self.statuses: dict[str, str] = {}
 
-    def report(self, **kwargs: object) -> Mapping[str, object]:
+    async def report(self, **kwargs: object) -> Mapping[str, object]:
         self.reports.append(dict(kwargs))
         return {"accepted": True}
 
-    def status(self, *, event_id: str) -> str | None:
+    async def status(self, *, event_id: str) -> str | None:
         return self.statuses.get(event_id)
 
 
@@ -74,7 +74,7 @@ class RecordingContext:
     def __init__(self) -> None:
         self.reports: list[dict[str, object]] = []
 
-    def report(self, **kwargs: object) -> Mapping[str, object]:
+    async def report(self, **kwargs: object) -> Mapping[str, object]:
         self.reports.append(dict(kwargs))
         return {"changed": True}
 
