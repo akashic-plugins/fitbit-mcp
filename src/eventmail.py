@@ -10,7 +10,7 @@ from agent.plugin_composition import ServiceKey
 class BoundAlertSource(Protocol):
     def close(self) -> None: ...
 
-    def report(
+    async def report(
         self,
         *,
         event_id: str,
@@ -19,7 +19,7 @@ class BoundAlertSource(Protocol):
         expires_at: datetime | None = None,
     ) -> Mapping[str, object]: ...
 
-    def status(self, *, event_id: str) -> str | None: ...
+    async def status(self, *, event_id: str) -> str | None: ...
 
 
 class AlertSourceServices(Protocol):
@@ -29,7 +29,7 @@ class AlertSourceServices(Protocol):
 class BoundContextSource(Protocol):
     def close(self) -> None: ...
 
-    def report(
+    async def report(
         self,
         *,
         event_id: str,
@@ -44,8 +44,8 @@ class ContextSourceServices(Protocol):
 
 
 EVENTMAIL_ALERT_SOURCE = ServiceKey[AlertSourceServices](
-    "eventmail.alert_source.v1"
+    "eventmail.alert_source.v2"
 )
 EVENTMAIL_CONTEXT_SOURCE = ServiceKey[ContextSourceServices](
-    "eventmail.context_source.v1"
+    "eventmail.context_source.v2"
 )
