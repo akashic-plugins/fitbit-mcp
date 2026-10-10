@@ -37,7 +37,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.2.6"
+version = "3.2.7"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
@@ -55,13 +55,7 @@ async def apply(ctx: Context) -> None:
 
     config = FitbitConfig.model_validate(ctx.config)
     await ctx.require(UI).register(
-        ctx, web="web_module.js",
-        dashboard=lambda: import_module(".dashboard", __package__),
-        requires=("workbench.panels.v2",),
-        provides=(),
-        contract_digests={
-            "workbench.panels.v2": "fb6417c9bf532c1fdb344767d06065d5d3293da85deb64eff1e8088889a33bcb",
-        },
+        ctx, dashboard=lambda: import_module(".dashboard", __package__),
     )
 
     # 1. 登记现有 monitor 与用户显式调用的普通 MCP 工具
