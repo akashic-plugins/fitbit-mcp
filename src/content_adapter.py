@@ -10,13 +10,8 @@ from urllib.parse import quote
 
 import requests
 
-from agent.plugin_composition import (
-    Context,
-    HealthHandle,
-    PluginTimers,
-    TimerHandle,
-    TimerStatus,
-)
+from agent.plugin_composition import Context, HealthHandle
+from plugins.timer.contract import OneShotTimer, TimerHandle, TimerStatus
 from .eventmail import BoundAlertSource, BoundContextSource
 from .sleep_context import FitbitAdapterStore
 
@@ -65,7 +60,7 @@ class FitbitWakeRuntime:
     def __init__(
         self,
         store: FitbitAdapterStore,
-        timers: PluginTimers,
+        timers: OneShotTimer,
         alerts: BoundAlertSource,
         context: BoundContextSource,
         monitor: FitbitMonitorClient,

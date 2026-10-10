@@ -8,14 +8,15 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from agent.plugin_composition import MANAGED_PROCESSES, MCP_SERVERS, UI_SLOTS
+from plugins.managed_processes.contract import MANAGED_PROCESSES
+from plugins.mcp.contract import MCP_SERVERS
+from plugins.ui.contract import UI_SLOTS
 from agent.plugins.composable import ComposablePlugin
 from agent.plugins.selection import PluginSelection
 from session.log import MessageLog
 from agent.plugins.manager import PluginManager
 from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironments
 from agent.plugins.static_manifest import load_static_plugin_manifest
-from bus.event_bus import EventBus
 from plugins.eventmail import plugin as eventmail_plugin
 from plugins.managed_processes.plugin import ManagedProcesses
 from plugins.mcp.plugin import McpServers
@@ -61,7 +62,7 @@ def _stage_plugin(tmp_path: Path) -> Path:
     content_source = Path(eventmail_plugin.__file__).resolve().parent
     shutil.copytree(content_source, source.parent / "eventmail")
     core_plugins = Path(os.environ["AKASHIC_AGENT_ROOT"]) / "plugins"
-    for provider in ("content", "mcp", "managed_processes", "tools", "ui"):
+    for provider in ("content", "mcp", "managed_processes", "tools", "ui", "timer"):
         shutil.copytree(core_plugins / provider, source.parent / provider)
     return source
 
@@ -131,7 +132,6 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
     manager = PluginManager(
         message_log=log,
         plugin_dirs=[plugin_root.parent],
-        event_bus=EventBus(),
         workspace=workspace,
         installed_cache_root=tmp_path / "home" / "cache",
     )
@@ -156,7 +156,7 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
         marker.write_text("keep this data", encoding="utf-8")
         plugin_path = plugin_root / "plugin.py"
         plugin_path.write_text(
-            plugin_path.read_text(encoding="utf-8").replace("3.2.4", "3.2.5"),
+            plugin_path.read_text(encoding="utf-8").replace("3.2.5", "3.2.6"),
             encoding="utf-8",
         )
         _prepare_python_environment(plugin_root, workspace)
@@ -168,7 +168,7 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
         assert manager.live_root is root
         new = manager.generation("fitbit")
         assert new is not None and new is not old and new.fiber is not None
-        assert cast(ComposablePlugin, new.instance).version == "3.2.5"
+        assert cast(ComposablePlugin, new.instance).version == "3.2.6"
         assert marker.read_text(encoding="utf-8") == "keep this data"
         mcp_servers = cast(McpServers, root.context.require(MCP_SERVERS))
         assert mcp_servers._entries["fitbit"].definition.required_tools == (

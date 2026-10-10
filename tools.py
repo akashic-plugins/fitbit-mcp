@@ -5,7 +5,8 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from agent.plugin_composition import MCP_SERVERS, Context, ServiceKey
+from agent.plugin_composition import Context, ServiceKey
+from plugins.mcp.contract import MCP_SERVERS
 from agent.plugin_contracts import ContentPart, json_value
 
 from ._tool_contract import BoundTool, CallSource, McpRoute, Result, TOOLS, ToolRef, ToolView

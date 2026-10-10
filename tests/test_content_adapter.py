@@ -8,8 +8,9 @@ from typing import cast
 
 import pytest
 
-from agent.control.timer import AsyncioOneShotTimer
-from agent.plugin_composition import CompositionRoot, PluginTimers
+from plugins.timer.timer import AsyncioOneShotTimer
+from plugins.timer.contract import TimerReceipt, TimerStatus
+from agent.plugin_composition import CompositionRoot
 from fitbit_test_plugin.src.eventmail import (  # pyright: ignore[reportMissingImports]
     BoundAlertSource,
     BoundContextSource,
@@ -90,7 +91,7 @@ def _runtime(
     return (
         FitbitWakeRuntime(
             store,
-            PluginTimers.candidate_validation(),
+            AsyncioOneShotTimer(),
             cast(BoundAlertSource, alerts),
             cast(BoundContextSource, context),
             cast(FitbitMonitorClient, monitor),
@@ -197,6 +198,35 @@ async def test_transient_monitor_error_rearms_and_recovers(tmp_path: Path) -> No
         finished.set()
         await asyncio.Future()
 
+    class TimerHandle:
+        id = "fitbit-retry"
+
+        def __init__(self, deadline):
+            self.deadline = deadline
+            self.task = asyncio.create_task(sleeper(0))
+
+        async def result(self):
+            try:
+                await asyncio.shield(self.task)
+            except asyncio.CancelledError:
+                if not self.task.cancelled():
+                    raise
+                status = TimerStatus.CANCELLED
+            else:
+                status = TimerStatus.FIRED
+            return TimerReceipt(self.id, self.deadline, NOW, status)
+
+        async def cancel(self):
+            self.task.cancel()
+            return await self.result()
+
+        async def cleanup(self):
+            await self.cancel()
+
+    class Timer:
+        def schedule(self, deadline):
+            return TimerHandle(deadline)
+
     class FailOnceMonitor(RecordingMonitor):
         def __init__(self) -> None:
             super().__init__()
@@ -215,7 +245,7 @@ async def test_transient_monitor_error_rearms_and_recovers(tmp_path: Path) -> No
     store.initialize(NOW)
     runtime = FitbitWakeRuntime(
         store,
-        PluginTimers(AsyncioOneShotTimer(clock=lambda: NOW, sleeper=sleeper)),
+        Timer(),
         cast(BoundAlertSource, alerts),
         cast(BoundContextSource, context),
         cast(FitbitMonitorClient, monitor),
