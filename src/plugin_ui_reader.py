@@ -4,7 +4,7 @@ from collections.abc import Mapping
 
 import requests
 
-from agent.plugin_composition import PluginUiRpcInvalidRequest
+from plugins.ui.contract import PluginUiRpcInvalidRequest
 
 
 _MONITOR_URL = "http://127.0.0.1:18765"

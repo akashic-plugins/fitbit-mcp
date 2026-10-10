@@ -7,24 +7,20 @@ from typing import cast
 
 from plugins.tools.plugin import TOOLS, ToolCatalog
 from agent.plugin_composition.tasks import TaskAdmission
-from agent.control.timer import AsyncioOneShotTimer
+from plugins.timer.timer import AsyncioOneShotTimer
 from agent.plugin_composition.host import HOST_INFO, HostInfo
 from fitbit_test_plugin.tools import FITBIT_TOOLS  # pyright: ignore[reportMissingImports]  # conftest 注册测试包。
 
 import pytest
-from agent.host_bridge.plugin_execution import CodeOwner, ExecutionAccess
-from agent.plugin_composition import (
-    MANAGED_PROCESSES,
-    MCP_SERVERS,
-    TIMERS,
-    UI_SLOTS,
-    CompositionRoot,
-    PluginRuntime,
-    PluginTimers,
-)
+from agent.plugins.execution import CodeOwner, ExecutionAccess
+from agent.plugin_composition import CompositionRoot, PluginRuntime
+from plugins.managed_processes.contract import MANAGED_PROCESSES
+from plugins.mcp.contract import MCP_SERVERS
+from plugins.timer.contract import TIMERS
+from plugins.ui.contract import UI_SLOTS
 from agent.plugin_composition.execution import EXECUTION
-from agent.plugin_composition.process_slots import ManagedProcessDefinition
-from agent.plugin_composition.ui import DASHBOARD_ROUTES, UI
+from plugins.managed_processes.contract import ManagedProcessDefinition
+from plugins.ui.contract import UI
 from contextlib import asynccontextmanager
 from plugins.mcp.plugin import McpServers
 from plugins.ui.plugin_ui import PluginUiSlots
@@ -84,7 +80,7 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
 
             return Bound()
 
-    await root.context.provide(TIMERS, PluginTimers(AsyncioOneShotTimer()))
+    await root.context.provide(TIMERS, AsyncioOneShotTimer())
     _ = await root.context.provide(EVENTMAIL_ALERT_SOURCE, Sources())
     _ = await root.context.provide(EVENTMAIL_CONTEXT_SOURCE, Sources())
 
@@ -92,7 +88,7 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.2.4"
+    assert plugin_module.version == "3.2.5"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx",)
     loaded = ComposablePlugin.from_module(
         plugin_module, load_static_plugin_manifest(ROOT),
@@ -113,8 +109,7 @@ async def test_apply_registers_wake_runtime_tools_and_plugin_ui(
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:test"))
     await root.context.provide(TOOLS, ToolCatalog(root.context, cast(TaskAdmission, None)))
-    await root.context.provide(UI, Ui(root.context))
-    await root.context.provide(DASHBOARD_ROUTES, ())
+    await root.context.provide(UI, Ui(root.context, ()))
     await root.context.provide(HOST_INFO, HostInfo(boot_id="fitbit-test", validation=False))
     await root.context.provide(UI_SLOTS, ui_slots)
     await _mount_services(root, tmp_path)
@@ -161,9 +156,8 @@ async def test_apply_keeps_tools_and_plugin_ui_without_eventmail(tmp_path: Path)
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:without-eventmail"))
     await root.context.provide(TOOLS, ToolCatalog(root.context, cast(TaskAdmission, None)))
-    await root.context.provide(TIMERS, PluginTimers(AsyncioOneShotTimer()))
-    await root.context.provide(UI, Ui(root.context))
-    await root.context.provide(DASHBOARD_ROUTES, ())
+    await root.context.provide(TIMERS, AsyncioOneShotTimer())
+    await root.context.provide(UI, Ui(root.context, ()))
     await root.context.provide(HOST_INFO, HostInfo(boot_id="fitbit-test", validation=False))
     await root.context.provide(UI_SLOTS, ui_slots)
     plugin = ComposablePlugin.from_module(
@@ -204,5 +198,5 @@ def test_static_manifest_freezes_runtime_and_candidate_exclusions(tmp_path: Path
     )
     manifest = load_static_plugin_manifest(artifact)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.2.4"
+    assert manifest.version == "3.2.5"
     assert manifest.requirements == ("requirements.txt",)

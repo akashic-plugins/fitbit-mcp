@@ -7,21 +7,12 @@ from .tools import register_tools
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent.plugin_composition import (
-    MANAGED_PROCESSES,
-    MCP_SERVERS,
-    RUNTIME_STARTED,
-    RUNTIME_STOPPING,
-    TIMERS,
-    UI_SLOTS,
-    Context,
-    EndpointEnv,
-    ManagedProcessDefinition,
-    McpServerDefinition,
-    PluginUiDefinition,
-    PluginUiNavigation,
-)
-from agent.plugin_composition.ui import UI
+from agent.plugin_composition import RUNTIME_STARTED, RUNTIME_STOPPING, Context
+from plugins.managed_processes.contract import MANAGED_PROCESSES, ManagedProcessDefinition
+from plugins.mcp.contract import MCP_SERVERS, EndpointEnv, McpServerDefinition
+from plugins.timer.contract import TIMERS
+from plugins.ui.contract import UI_SLOTS, PluginUiDefinition, PluginUiNavigation
+from plugins.ui.contract import UI
 from .src.content_adapter import (
     FitbitWakeRuntime,
     FitbitMonitorClient,
@@ -46,7 +37,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.2.4"
+version = "3.2.5"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
