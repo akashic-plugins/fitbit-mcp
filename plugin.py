@@ -37,7 +37,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.2.5"
+version = "3.2.6"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
@@ -74,7 +74,8 @@ async def apply(ctx: Context) -> None:
             port_env="FITBIT_MONITOR_PORT",
             formal_port=18765,
             readiness_path="/api/data",
-            startup_timeout_seconds=15.0,
+            # 首次加载模型与科学计算库时，为并行启动留出余量。
+            startup_timeout_seconds=60.0,
         ),
     )
     await ctx.require(MCP_SERVERS).register(
