@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import datetime
+
 import inspect
 import shutil
 from pathlib import Path
@@ -29,10 +32,7 @@ from agent.plugins.composable import ComposablePlugin
 from agent.plugins.static_manifest import load_static_plugin_manifest
 from fitbit_test_plugin import plugin as plugin_module  # pyright: ignore[reportMissingImports]
 from fitbit_test_plugin.plugin import FitbitConfig  # pyright: ignore[reportMissingImports]
-from fitbit_test_plugin.src.eventmail import (  # pyright: ignore[reportMissingImports]
-    EVENTMAIL_ALERT_SOURCE,
-    EVENTMAIL_CONTEXT_SOURCE,
-)
+from plugins.eventmail.contract import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
 from src import plugin_ui_reader
 from src.plugin_ui_reader import plugin_ui_query
 
@@ -72,12 +72,19 @@ def _execution(root: CompositionRoot, generation_id: str) -> ExecutionAccess:
 
 
 async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
-    class Sources:
-        def bind(self, source_id: str) -> object:
-            class Bound:
-                def close(self) -> None:
-                    return None
+    class Bound:
+        def close(self) -> None:
+            pass
 
+        async def report(self, *, event_id: str, payload: Mapping[str, object],
+                         observed_at: datetime, expires_at: datetime | None = None) -> Mapping[str, object]:
+            raise AssertionError("来源在 runtime 启动前不能发送")
+
+        async def status(self, *, event_id: str) -> str | None:
+            raise AssertionError("来源在 runtime 启动前不能查询")
+
+    class Sources:
+        def bind(self, source_id: str) -> Bound:
             return Bound()
 
     await root.context.provide(TIMERS, AsyncioOneShotTimer())

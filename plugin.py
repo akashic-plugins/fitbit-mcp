@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from ._tool_contract import TOOLS
+from plugins.tools.contract import TOOLS
 from importlib import import_module
 from .tools import register_tools
 
@@ -17,7 +17,7 @@ from .src.content_adapter import (
     FitbitWakeRuntime,
     FitbitMonitorClient,
 )
-from .src.eventmail import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
+from plugins.eventmail.contract import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
 from .src.plugin_ui_reader import plugin_ui_query
 from .src.sleep_context import FitbitAdapterStore
 

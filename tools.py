@@ -7,9 +7,10 @@ from pathlib import Path
 
 from agent.plugin_composition import Context, ServiceKey
 from plugins.mcp.contract import MCP_SERVERS
-from agent.plugin_contracts import ContentPart, json_value
+from plugins.ledger.contract import ContentPart, json_value
 
-from ._tool_contract import BoundTool, CallSource, McpRoute, Result, TOOLS, ToolRef, ToolView
+from plugins.tools.contract import ProviderBoundTool as BoundTool, CallSource, Result, TOOLS, ToolRef, ToolView
+from plugins.mcp.contract import McpRoute
 
 
 FITBIT_TOOLS = ServiceKey[ToolView]("fitbit.tools.v1")

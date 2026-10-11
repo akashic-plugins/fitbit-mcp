@@ -13,7 +13,7 @@ from plugins.mcp.contract import MCP_SERVERS
 from plugins.ui.contract import UI_SLOTS
 from agent.plugins.composable import ComposablePlugin
 from agent.plugins.selection import PluginSelection
-from session.log import MessageLog
+from plugins.ledger.log import MessageLog
 from agent.plugins.manager import PluginManager
 from agent.plugins.python_environment import ENVIRONMENT_FILE, PythonEnvironments
 from agent.plugins.static_manifest import load_static_plugin_manifest
@@ -62,7 +62,7 @@ def _stage_plugin(tmp_path: Path) -> Path:
     content_source = Path(eventmail_plugin.__file__).resolve().parent
     shutil.copytree(content_source, source.parent / "eventmail")
     core_plugins = Path(os.environ["AKASHIC_AGENT_ROOT"]) / "plugins"
-    for provider in ("content", "mcp", "managed_processes", "tools", "ui", "timer"):
+    for provider in ("ledger", "host_execution", "content", "mcp", "managed_processes", "tools", "ui", "timer"):
         shutil.copytree(core_plugins / provider, source.parent / provider)
     return source
 
@@ -128,13 +128,8 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
     workspace.mkdir(exist_ok=True)
     PluginSelection(workspace).initialize()
     _prepare_python_environment(plugin_root, workspace)
-    log = MessageLog(tmp_path / "sessions.db")
-    manager = PluginManager(
-        message_log=log,
-        plugin_dirs=[plugin_root.parent],
-        workspace=workspace,
-        installed_cache_root=tmp_path / "home" / "cache",
-    )
+    log = MessageLog(workspace / "sessions.db")
+    manager = PluginManager(plugin_dirs=[plugin_root.parent], workspace=workspace, installed_cache_root=tmp_path / 'home' / 'cache')
     root = None
     try:
         await manager.load_all()
