@@ -11,10 +11,7 @@ import pytest
 from plugins.timer.timer import AsyncioOneShotTimer
 from plugins.timer.contract import TimerReceipt, TimerStatus
 from agent.plugin_composition import CompositionRoot
-from fitbit_test_plugin.src.eventmail import (  # pyright: ignore[reportMissingImports]
-    BoundAlertSource,
-    BoundContextSource,
-)
+from plugins.eventmail.contract import BoundAlertSource, BoundContextSource
 from src.content_adapter import (
     FitbitMonitorClient,
     FitbitWakeRuntime,
