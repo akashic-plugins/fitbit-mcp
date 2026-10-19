@@ -11,14 +11,12 @@ from agent.plugin_composition import RUNTIME_STARTED, RUNTIME_STOPPING, Context
 from plugins.managed_processes.contract import MANAGED_PROCESSES, ManagedProcessDefinition
 from plugins.mcp.contract import MCP_SERVERS, EndpointEnv, McpServerDefinition
 from plugins.timer.contract import TIMERS
-from plugins.ui.contract import UI_SLOTS, PluginUiDefinition, PluginUiNavigation
 from plugins.ui.contract import UI
 from .src.content_adapter import (
     FitbitWakeRuntime,
     FitbitMonitorClient,
 )
 from plugins.eventmail.contract import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
-from .src.plugin_ui_reader import plugin_ui_query
 from .src.sleep_context import FitbitAdapterStore
 
 
@@ -37,7 +35,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.2.7"
+version = "3.2.8"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
@@ -46,12 +44,11 @@ inject = (
     MCP_SERVERS,
     TIMERS,
     UI,
-    UI_SLOTS,
 )
 
 
 async def apply(ctx: Context) -> None:
-    """装配 monitor、工具、Wake 来源和插件界面。"""
+    """装配 monitor、工具、Wake 来源和 Dashboard。"""
 
     config = FitbitConfig.model_validate(ctx.config)
     await ctx.require(UI).register(
@@ -134,18 +131,4 @@ async def apply(ctx: Context) -> None:
         (TIMERS, EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE),
         apply_eventmail,
         name="fitbit-eventmail-source",
-    )
-
-    # 3. 在同一个 Root 上注册 Web 插件界面投影。
-    await ctx.require(UI_SLOTS).register_plugin_ui(
-        ctx,
-        PluginUiDefinition(
-            module="plugin_ui.js",
-            stylesheet="plugin_ui.css",
-            navigation=PluginUiNavigation(
-                label="健康状态",
-                description="查看当前心率、血氧、步数和最近睡眠节律",
-            ),
-        ),
-        query=plugin_ui_query,
     )
