@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: kachofugetsu09/akashic-agent
-          ref: ca3d0d20baa420dd6b847dedfff53308b1d17bb6
+          ref: cbd7d3f775d2d4669e3d929272aea29ed4de1b0e
           path: .akashic-core
       - uses: actions/setup-python@v5
         with:
@@ -41,14 +41,6 @@ jobs:
           AKASHIC_PLUGIN_FIXTURE_PYTHON: ${{ github.workspace }}/.venv/bin/python
           PYTHONPATH: .akashic-core:${{ github.workspace }}/.akashic-core/sdk/python/src
         run: .venv/bin/python -m pytest -q tests/
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - name: Verify Fitbit panels
-        run: |
-          npm ci
-          npm test
       - name: Check v3 source types
         env:
           PYTHONPATH: .akashic-core:${{ github.workspace }}/.akashic-core/sdk/python/src

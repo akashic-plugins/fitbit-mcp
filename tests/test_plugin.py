@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import datetime
+
 import inspect
 import shutil
 from pathlib import Path
@@ -17,24 +20,17 @@ from agent.plugin_composition import CompositionRoot, PluginRuntime
 from plugins.managed_processes.contract import MANAGED_PROCESSES
 from plugins.mcp.contract import MCP_SERVERS
 from plugins.timer.contract import TIMERS
-from plugins.ui.contract import UI_SLOTS
 from agent.plugin_composition.execution import EXECUTION
 from plugins.managed_processes.contract import ManagedProcessDefinition
 from plugins.ui.contract import UI
 from contextlib import asynccontextmanager
 from plugins.mcp.plugin import McpServers
-from plugins.ui.plugin_ui import PluginUiSlots
 from plugins.ui.plugin import Ui
 from agent.plugins.composable import ComposablePlugin
 from agent.plugins.static_manifest import load_static_plugin_manifest
 from fitbit_test_plugin import plugin as plugin_module  # pyright: ignore[reportMissingImports]
 from fitbit_test_plugin.plugin import FitbitConfig  # pyright: ignore[reportMissingImports]
-from fitbit_test_plugin.src.eventmail import (  # pyright: ignore[reportMissingImports]
-    EVENTMAIL_ALERT_SOURCE,
-    EVENTMAIL_CONTEXT_SOURCE,
-)
-from src import plugin_ui_reader
-from src.plugin_ui_reader import plugin_ui_query
+from plugins.eventmail.contract import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,12 +68,19 @@ def _execution(root: CompositionRoot, generation_id: str) -> ExecutionAccess:
 
 
 async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
-    class Sources:
-        def bind(self, source_id: str) -> object:
-            class Bound:
-                def close(self) -> None:
-                    return None
+    class Bound:
+        def close(self) -> None:
+            pass
 
+        async def report(self, *, event_id: str, payload: Mapping[str, object],
+                         observed_at: datetime, expires_at: datetime | None = None) -> Mapping[str, object]:
+            raise AssertionError("来源在 runtime 启动前不能发送")
+
+        async def status(self, *, event_id: str) -> str | None:
+            raise AssertionError("来源在 runtime 启动前不能查询")
+
+    class Sources:
+        def bind(self, source_id: str) -> Bound:
             return Bound()
 
     await root.context.provide(TIMERS, AsyncioOneShotTimer())
@@ -88,30 +91,28 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.2.7"
+    assert plugin_module.version == "3.2.8"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx",)
     loaded = ComposablePlugin.from_module(
         plugin_module, load_static_plugin_manifest(ROOT),
     )
-    assert UI in loaded.inject and UI_SLOTS in loaded.inject
+    assert UI in loaded.inject
     assert "PROACTIVE_COMPONENTS" not in ROOT.joinpath("plugin.py").read_text()
 
 
 @pytest.mark.asyncio
-async def test_apply_registers_wake_runtime_tools_and_plugin_ui(
+async def test_apply_registers_wake_runtime_and_tools(
     tmp_path: Path,
 ) -> None:
     root = CompositionRoot("fitbit:test")
     processes = _Processes()
     servers = McpServers(root.context)
-    ui_slots = PluginUiSlots(root.context)
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:test"))
     await root.context.provide(TOOLS, ToolCatalog(root.context, cast(TaskAdmission, None)))
     await root.context.provide(UI, Ui(root.context, ()))
     await root.context.provide(HOST_INFO, HostInfo(boot_id="fitbit-test", validation=False))
-    await root.context.provide(UI_SLOTS, ui_slots)
     await _mount_services(root, tmp_path)
     data_dir = tmp_path / "plugin-data"
 
@@ -135,23 +136,20 @@ async def test_apply_registers_wake_runtime_tools_and_plugin_ui(
     assert root.receipt().ready, root.receipt().incidents
     process = processes.definitions["monitor"]
     mcp = servers._entries["fitbit"].definition
-    ui_binding = ui_slots._registrations["fitbit"].descriptor
     assert process.cwd == "."
     assert process.port_env == "FITBIT_MONITOR_PORT"
     assert mcp.required_tools == ("fitbit_health_snapshot", "fitbit_sleep_report")
     assert mcp.candidate_env == {"FITBIT_BACKEND": "recording"}
-    assert ui_binding.navigation_label == "健康状态"
     assert data_dir.joinpath("adapter.sqlite3").is_file()
     assert any(item["name"].startswith("mcp_fitbit__") for item in (ref.description for ref in root.context.require(FITBIT_TOOLS).refs))
     await root.dispose()
 
 
 @pytest.mark.asyncio
-async def test_apply_keeps_tools_and_plugin_ui_without_eventmail(tmp_path: Path) -> None:
+async def test_apply_keeps_tools_without_eventmail(tmp_path: Path) -> None:
     root = CompositionRoot("fitbit:without-eventmail")
     processes = _Processes()
     servers = McpServers(root.context)
-    ui_slots = PluginUiSlots(root.context)
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:without-eventmail"))
@@ -159,7 +157,6 @@ async def test_apply_keeps_tools_and_plugin_ui_without_eventmail(tmp_path: Path)
     await root.context.provide(TIMERS, AsyncioOneShotTimer())
     await root.context.provide(UI, Ui(root.context, ()))
     await root.context.provide(HOST_INFO, HostInfo(boot_id="fitbit-test", validation=False))
-    await root.context.provide(UI_SLOTS, ui_slots)
     plugin = ComposablePlugin.from_module(
         plugin_module, load_static_plugin_manifest(ROOT),
     )
@@ -179,7 +176,6 @@ async def test_apply_keeps_tools_and_plugin_ui_without_eventmail(tmp_path: Path)
 
     assert root.receipt().ready, root.receipt().incidents
     assert "fitbit" in servers._entries
-    assert "fitbit" in ui_slots._registrations
     assert not (tmp_path / "plugin-data/adapter.sqlite3").exists()
     assert any(item["name"].startswith("mcp_fitbit__") for item in (ref.description for ref in root.context.require(FITBIT_TOOLS).refs))
     await root.dispose()
@@ -198,5 +194,5 @@ def test_static_manifest_freezes_runtime_and_candidate_exclusions(tmp_path: Path
     )
     manifest = load_static_plugin_manifest(artifact)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.2.7"
+    assert manifest.version == "3.2.8"
     assert manifest.requirements == ("requirements.txt",)
