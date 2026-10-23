@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from urllib.parse import quote
@@ -69,6 +69,7 @@ class FitbitWakeRuntime:
         sleep_ttl: timedelta,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         after_provider_ack: Callable[[], None] | None = None,
+        monitor_ready: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._store = store
         self._timers = timers
@@ -79,6 +80,7 @@ class FitbitWakeRuntime:
         self._sleep_ttl = sleep_ttl
         self._now = now
         self._after_provider_ack = after_provider_ack
+        self._monitor_ready = monitor_ready
         self._handle: TimerHandle | None = None
         self._task: asyncio.Task[None] | None = None
         self._closed = False
@@ -111,6 +113,9 @@ class FitbitWakeRuntime:
     async def _run(self, ctx: Context, health: HealthHandle) -> None:
         """轮询、显式记录临时失败，并只在可恢复结果后重臂。"""
 
+        # monitor 在后台就绪；首轮前等它可用，避免开机第一轮必然失败。
+        if self._monitor_ready is not None:
+            await self._monitor_ready()
         deadline = self._store.next_due()
         while not self._closed:
             handle = self._timers.schedule(deadline)
