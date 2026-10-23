@@ -39,6 +39,9 @@ ROOT = Path(__file__).resolve().parents[1]
 class _ProcessHandle:
     """记录式进程句柄；单测只固定声明，不启动真实 monitor。"""
 
+    def check(self, ctx: object) -> None:
+        return None
+
     def port(self, ctx: object) -> int:
         return 18765
 
@@ -91,7 +94,7 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.2.8"
+    assert plugin_module.version == "3.2.9"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx",)
     loaded = ComposablePlugin.from_module(
         plugin_module, load_static_plugin_manifest(ROOT),
@@ -194,5 +197,5 @@ def test_static_manifest_freezes_runtime_and_candidate_exclusions(tmp_path: Path
     )
     manifest = load_static_plugin_manifest(artifact)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.2.8"
+    assert manifest.version == "3.2.9"
     assert manifest.requirements == ("requirements.txt",)

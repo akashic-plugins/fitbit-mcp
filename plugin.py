@@ -35,7 +35,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.2.8"
+version = "3.2.9"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
@@ -67,6 +67,8 @@ async def apply(ctx: Context) -> None:
             readiness_path="/api/data",
             # 首次加载模型与科学计算库时，为并行启动留出余量。
             startup_timeout_seconds=60.0,
+            # 模型加载要数秒，不挡宿主就绪；工具经 MCP 借用、轮询先等就绪。
+            background_ready=True,
         ),
     )
     await ctx.require(MCP_SERVERS).register(
@@ -85,6 +87,10 @@ async def apply(ctx: Context) -> None:
     )
 
     await register_tools(ctx, description=desc)
+
+    async def monitor_ready() -> None:
+        async with monitor.borrow(ctx):
+            return
 
     # 2. EventMail 存在时，独立子 Fiber 才启动健康来源。
     async def apply_eventmail(source_ctx: Context) -> None:
@@ -108,6 +114,7 @@ async def apply(ctx: Context) -> None:
             alert_source,
             context_source,
             FitbitMonitorClient(),
+            monitor_ready=monitor_ready,
             poll_interval=timedelta(seconds=config.content.poll_interval_seconds),
             sleep_ttl=timedelta(seconds=config.content.sleep_ttl_seconds),
         )
