@@ -7,6 +7,7 @@ Fitbit 实时健康数据仪表板
 import json, os, time, base64, secrets, hashlib, urllib.parse, asyncio, copy, sys, atexit, shutil
 from collections import deque
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from datetime import datetime, date, timedelta
 from threading import Thread, Lock, Event
 from pathlib import Path
@@ -1239,6 +1240,8 @@ def _safe_float(v) -> float | None:
         return None
 
 
+# 每轮轮询都要遍历整个历史窗口解析 poll_time；datetime 不可变，可按字符串缓存。
+@lru_cache(maxsize=16384)
 def _parse_poll_dt(raw: str | None) -> datetime | None:
     if not raw:
         return None
