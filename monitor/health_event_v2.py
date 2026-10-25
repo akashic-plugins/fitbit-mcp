@@ -129,7 +129,8 @@ class HealthEventV2Engine:
         self._hr_episode_active = False
         self._last_hr_evidence_id: str | None = None
         self._strain_run = 0
-        self._spo2_seen: set[str] = set()
+        # 去重键记下引入它的行时间，常驻检测器据此随窗口一起裁剪。
+        self._spo2_seen: dict[str, datetime] = {}
         self._active_sleep_session_key: str | None = None
         self._last_sleep_session_key: str | None = None
         self._last_sleep_session_end_dt: datetime | None = None
@@ -198,7 +199,7 @@ class HealthEventV2Engine:
         if spo2 is not None and spo2_hms is not None:
             spo2_key = f"{dkey} {spo2_hms[0]:02d}:{spo2_hms[1]:02d}:{spo2_hms[2]:02d}"
             if spo2_key not in self._spo2_seen:
-                self._spo2_seen.add(spo2_key)
+                self._spo2_seen[spo2_key] = dt
                 session_key = self._resolve_spo2_session_key(dt)
 
         spo2_for_history = spo2 if session_key is not None else None
@@ -542,6 +543,18 @@ def load_log_rows(
     return rows
 
 
+# 常驻检测器只保留窗口内的行；窗口外的去重键与事件随之丢弃，内存不随运行时长增长。
+def _trim_to_window(detector: HealthEventV2Engine, history: list[dict[str, Any]]) -> None:
+    start = next((dt for row in history if (dt := _parse_dt(row.get("poll_time"))) is not None), None)
+    if start is None:
+        return
+    while detector._history and detector._history[0]["dt"] < start:
+        detector._history.popleft()
+    detector._spo2_seen = {key: dt for key, dt in detector._spo2_seen.items() if dt >= start}
+    oldest = start.strftime("%Y-%m-%d %H:%M")
+    detector._events = [event for event in detector._events if event.created_at >= oldest]
+
+
 class HealthEventV2Runtime:
     """
     运行时包装器：复用 v2 检测策略，并提供与 StatEngine 兼容的接口。
@@ -561,9 +574,9 @@ class HealthEventV2Runtime:
         self._pending: dict[str, dict[str, Any]] = {}
         self._acked: list[str] = []
         self._max_event_age_hours = max(1, int(max_event_age_hours))
-        # 常驻检测器及其已处理到的最后一行；进程重启后为空，首轮整段重放。
+        # 常驻检测器及其已处理到的最后一行对象；进程重启后为空，首轮整段重放。
         self._detector: HealthEventV2Engine | None = None
-        self._detector_last_dt: datetime | None = None
+        self._detector_last_row: dict[str, Any] | None = None
         self._load()
 
     def _load(self) -> None:
@@ -619,24 +632,23 @@ class HealthEventV2Runtime:
         for eid in remove_ids:
             self._pending.pop(eid, None)
 
-    # 新行接在已处理前缀之后时只喂新行，否则整段重放；整段重放每行都要扫一遍窗口，
-    # 6000 行窗口每轮约 10 秒 CPU，而每轮实际只新增一行。
+    # 上次处理的那一行仍在窗口里时只喂其后的新行，否则整段重放；整段重放每行都要扫一遍窗口，
+    # 6000 行窗口每轮约 10 秒 CPU，而每轮实际只新增一行。按行对象身份续读，不依赖时间戳单调。
     def _detect(self, history: list[dict[str, Any]]) -> list[V2Event]:
-        dated = [(dt, row) for row in history if (dt := _parse_dt(row.get("poll_time"))) is not None]
-        last = self._detector_last_dt
-        detector = self._detector
-        if detector is None or last is None or not dated or dated[0][0] > last:
-            # 1. 首轮、历史断档或窗口整体越过已处理位置：与重启后一样整段重放。
+        detector, last = self._detector, self._detector_last_row
+        position = None
+        if detector is not None and last is not None:
+            position = next((i for i in range(len(history) - 1, -1, -1) if history[i] is last), None)
+        if detector is None or position is None:
+            # 1. 首轮，或上次处理的行已不在窗口（回退、替换、断档）：与重启后一样整段重放。
             detector = HealthEventV2Engine()
-            events = detector.process([row for _, row in dated])
+            events = detector.process(history)
         else:
-            # 2. 基线只看窗口内的行，先裁掉已滑出窗口的旧行，结果与整段重放一致。
-            window_start = dated[0][0]
-            while detector._history and detector._history[0]["dt"] < window_start:
-                detector._history.popleft()
-            events = [e for dt, row in dated if dt > last for e in detector.ingest_row(row)]
+            # 2. 基线只看窗口内的行：先裁掉已滑出窗口的行及其去重和事件记录，再喂新行。
+            _trim_to_window(detector, history)
+            events = [e for row in history[position + 1:] for e in detector.ingest_row(row)]
         self._detector = detector
-        self._detector_last_dt = dated[-1][0] if dated else last
+        self._detector_last_row = history[-1] if history else None
         return events
 
     def update(self, log_entry: dict[str, Any], history: list[dict[str, Any]]) -> None:
