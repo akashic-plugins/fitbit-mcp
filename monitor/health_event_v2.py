@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -35,6 +36,12 @@ def _parse_dt(v: Any) -> datetime | None:
     s = str(v or "").strip()
     if not s:
         return None
+    return _parse_dt_text(s)
+
+
+# 历史窗口每轮都会重新解析同一批时间串；datetime 不可变，可按字符串缓存。
+@lru_cache(maxsize=16384)
+def _parse_dt_text(s: str) -> datetime | None:
     fmts = (
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
@@ -554,6 +561,9 @@ class HealthEventV2Runtime:
         self._pending: dict[str, dict[str, Any]] = {}
         self._acked: list[str] = []
         self._max_event_age_hours = max(1, int(max_event_age_hours))
+        # 常驻检测器及其已处理到的最后一行；进程重启后为空，首轮整段重放。
+        self._detector: HealthEventV2Engine | None = None
+        self._detector_last_dt: datetime | None = None
         self._load()
 
     def _load(self) -> None:
@@ -609,10 +619,29 @@ class HealthEventV2Runtime:
         for eid in remove_ids:
             self._pending.pop(eid, None)
 
+    # 新行接在已处理前缀之后时只喂新行，否则整段重放；整段重放每行都要扫一遍窗口，
+    # 6000 行窗口每轮约 10 秒 CPU，而每轮实际只新增一行。
+    def _detect(self, history: list[dict[str, Any]]) -> list[V2Event]:
+        dated = [(dt, row) for row in history if (dt := _parse_dt(row.get("poll_time"))) is not None]
+        last = self._detector_last_dt
+        detector = self._detector
+        if detector is None or last is None or not dated or dated[0][0] > last:
+            # 1. 首轮、历史断档或窗口整体越过已处理位置：与重启后一样整段重放。
+            detector = HealthEventV2Engine()
+            events = detector.process([row for _, row in dated])
+        else:
+            # 2. 基线只看窗口内的行，先裁掉已滑出窗口的旧行，结果与整段重放一致。
+            window_start = dated[0][0]
+            while detector._history and detector._history[0]["dt"] < window_start:
+                detector._history.popleft()
+            events = [e for dt, row in dated if dt > last for e in detector.ingest_row(row)]
+        self._detector = detector
+        self._detector_last_dt = dated[-1][0] if dated else last
+        return events
+
     def update(self, log_entry: dict[str, Any], history: list[dict[str, Any]]) -> None:
-        # 每轮基于历史重算，确保重启后也能稳定得到同一批 v2 事件。
-        detector = HealthEventV2Engine()
-        all_events = [e.to_dict() for e in detector.process(list(history))]
+        # 重启后首轮整段重放，确保得到同一批 v2 事件；之后增量处理新行。
+        all_events = [e.to_dict() for e in self._detect(history)]
         acked_set = set(self._acked)
         self._purge_expired()
 
