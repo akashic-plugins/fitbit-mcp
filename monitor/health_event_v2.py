@@ -545,7 +545,8 @@ def load_log_rows(
 
 # 常驻检测器只保留窗口内的行；窗口外的去重键与事件随之丢弃，内存不随运行时长增长。
 def _trim_to_window(detector: HealthEventV2Engine, history: list[dict[str, Any]]) -> None:
-    start = next((dt for row in history if (dt := _parse_dt(row.get("poll_time"))) is not None), None)
+    # 时间可能不单调，边界取窗口内最早时间：只会多留，不会提前删掉仍在窗口里的行引入的记录。
+    start = min((dt for row in history if (dt := _parse_dt(row.get("poll_time"))) is not None), default=None)
     if start is None:
         return
     while detector._history and detector._history[0]["dt"] < start:
