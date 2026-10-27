@@ -357,32 +357,25 @@ class OnlineViterbiState:
         return f"Viterbi 判定{label}（睡眠概率 {prob:.0%}，分差 {gap:.2f}）"
 
 
-# ── Fitbit 自动标注 ───────────────────────────────────────────────────────────
+# ── Google Health 自动标注 ────────────────────────────────────────────────────
 
 
 def fetch_and_label(tokens: dict, target_date: str | None = None) -> bool:
     """
-    从 Fitbit Sleep API 拉取指定日期的睡眠记录并写入标注文件。
+    从 Google Health 拉取指定日期（醒来当天）的睡眠记录并写入标注文件。
     target_date: 'YYYY-MM-DD'，默认昨天。
     返回是否新增了标注。
     """
-    import requests
+    import google_health
 
-    if target_date is None:
-        target_date = (date.today() - timedelta(days=1)).isoformat()
-
-    r = requests.get(
-        f"https://api.fitbit.com/1.2/user/-/sleep/date/{target_date}.json",
-        headers={"Authorization": f"Bearer {tokens['access_token']}"},
-        timeout=15,
-    )
-    if not r.ok:
-        print(f"Fitbit 睡眠 API 失败：{r.status_code}")
+    day = date.fromisoformat(target_date) if target_date else date.today() - timedelta(days=1)
+    try:
+        sleeps = google_health.HealthClient(tokens["access_token"]).sleep_sessions(day, day)
+    except google_health.HealthApiError as e:
+        print(f"Google Health 睡眠 API 失败：{e.status}")
         return False
-
-    sleeps = r.json().get("sleep", [])
     if not sleeps:
-        print(f"{target_date} 无睡眠记录")
+        print(f"{day} 无睡眠记录")
         return False
 
     added = False

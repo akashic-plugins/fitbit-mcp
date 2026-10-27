@@ -54,13 +54,16 @@ def test_failed_sleep_fetch_cannot_replace_the_last_valid_projection() -> None:
     guard = next(
         node
         for node in ast.walk(report)
-        if isinstance(node, ast.If)
-        and isinstance(node.test, ast.UnaryOp)
-        and isinstance(node.test.op, ast.Not)
-        and isinstance(node.test.operand, ast.Attribute)
-        and isinstance(node.test.operand.value, ast.Name)
-        and node.test.operand.value.id == "sleep_r"
-        and node.test.operand.attr == "ok"
+        if isinstance(node, ast.Try)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "sleep_sessions"
+            for call in ast.walk(node)
+        )
     )
 
-    assert any(isinstance(node, ast.Return) for node in guard.body)
+    assert all(
+        any(isinstance(node, ast.Return) for node in handler.body)
+        for handler in guard.handlers
+    )

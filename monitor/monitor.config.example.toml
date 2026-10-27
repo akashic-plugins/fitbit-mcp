@@ -1,13 +1,10 @@
-[fitbit]
+[google_health]
 # 1. 本文件仅作示例，不要直接写入真实 secret 后提交。
 # 2. 本地请复制为 monitor.config.local.toml 再填写。
-client_id = "23V3JZ"
-client_secret = "REPLACE_WITH_YOUR_FITBIT_CLIENT_SECRET"
-redirect_uri = "http://127.0.0.1:18765/oauth/callback"
-auth_url = "https://www.fitbit.com/oauth2/authorize"
-token_url = "https://api.fitbit.com/oauth2/token"
-api_base = "https://api.fitbit.com"
-scopes = "heartrate activity oxygen_saturation sleep temperature"
+# 3. Google Cloud OAuth 客户端（Web 应用），重定向 URI 需与这里一致。
+client_id = "REPLACE_WITH_YOUR_GOOGLE_CLIENT_ID"
+client_secret = "REPLACE_WITH_YOUR_GOOGLE_CLIENT_SECRET"
+redirect_uri = "http://localhost:18765/oauth/callback"
 
 [server]
 host = "127.0.0.1"

@@ -128,7 +128,7 @@ def test_registered_overview_reads_one_compact_monitor_snapshot(
 def test_monitor_authorization_redirect_becomes_a_plugin_owned_dto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authorization_url = "https://www.fitbit.com/oauth2/authorize?client_id=fitbit"
+    authorization_url = "https://accounts.google.com/o/oauth2/v2/auth?client_id=health"
     calls: list[tuple[str, int, bool]] = []
 
     class Response:
