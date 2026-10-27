@@ -57,7 +57,7 @@ def _monitor_payload(path: str) -> object:
 
 
 def _monitor_authorization_url() -> str:
-    """Read the monitor-generated Fitbit authorization redirect as a DTO."""
+    """Read the monitor-generated Google Health authorization redirect as a DTO."""
 
     try:
         response = requests.get(
@@ -75,8 +75,8 @@ def _monitor_authorization_url() -> str:
         not response.is_redirect
         or not isinstance(authorization_url, str)
         or parsed.scheme != "https"
-        or parsed.netloc != "www.fitbit.com"
-        or parsed.path != "/oauth2/authorize"
+        or parsed.netloc != "accounts.google.com"
+        or parsed.path != "/o/oauth2/v2/auth"
     ):
         raise HTTPException(status_code=502, detail="Fitbit monitor 返回无效授权地址")
     return authorization_url

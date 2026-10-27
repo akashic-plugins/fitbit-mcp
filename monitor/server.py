@@ -4,7 +4,7 @@ Fitbit 实时健康数据仪表板
 访问 http://<host>:<port>
 """
 
-import json, os, time, base64, secrets, hashlib, urllib.parse, asyncio, copy, sys, atexit, shutil
+import json, os, time, base64, secrets, hashlib, asyncio, copy, sys, atexit, shutil
 from collections import deque
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 import uvicorn
 
 from runtime_env import RotatingTextLog, resolve_server_port
+import google_health
 import sleep_model
 import retrain_guard
 import build_sleep_diff_report
@@ -147,17 +148,13 @@ DEFAULT_CONFIG: dict = {
         "log_level": "warning",
         "poll_interval_sec": 300,
     },
-    "fitbit": {
-        "client_id": "23V3JZ",
+    "google_health": {
+        "client_id": "",
         "client_secret": "",
-        "redirect_uri": "http://127.0.0.1:18765/oauth/callback",
-        "auth_url": "https://www.fitbit.com/oauth2/authorize",
-        "token_url": "https://api.fitbit.com/oauth2/token",
-        "api_base": "https://api.fitbit.com",
-        "scopes": "heartrate activity oxygen_saturation sleep temperature",
+        "redirect_uri": "http://localhost:18765/oauth/callback",
     },
     "files": {
-        "token_file": "tokens.json",
+        "token_file": "google_tokens.json",
         "log_file": "sleep_log.jsonl",
         "static_dir": "static",
         "sleep_diff_report_file": "static/sleep_diff_report.html",
@@ -325,18 +322,16 @@ def _load_runtime_config() -> dict:
 
 CONFIG = _load_runtime_config()
 
-CLIENT_ID = str(
-    _get_cfg(CONFIG, ("fitbit", "client_id"), DEFAULT_CONFIG["fitbit"]["client_id"])
-)
-CLIENT_SECRET = str(
-    _get_cfg(
-        CONFIG, ("fitbit", "client_secret"), DEFAULT_CONFIG["fitbit"]["client_secret"]
-    )
-)
-REDIRECT_URI = str(
-    _get_cfg(
-        CONFIG, ("fitbit", "redirect_uri"), DEFAULT_CONFIG["fitbit"]["redirect_uri"]
-    )
+OAUTH_CLIENT = google_health.OAuthClient(
+    client_id=str(_get_cfg(CONFIG, ("google_health", "client_id"), "")),
+    client_secret=str(_get_cfg(CONFIG, ("google_health", "client_secret"), "")),
+    redirect_uri=str(
+        _get_cfg(
+            CONFIG,
+            ("google_health", "redirect_uri"),
+            DEFAULT_CONFIG["google_health"]["redirect_uri"],
+        )
+    ),
 )
 TOKEN_FILE = _resolve_local_path(
     str(
@@ -344,21 +339,6 @@ TOKEN_FILE = _resolve_local_path(
     ),
     DEFAULT_CONFIG["files"]["token_file"],
 )
-AUTH_URL = str(
-    _get_cfg(CONFIG, ("fitbit", "auth_url"), DEFAULT_CONFIG["fitbit"]["auth_url"])
-)
-TOKEN_URL = str(
-    _get_cfg(CONFIG, ("fitbit", "token_url"), DEFAULT_CONFIG["fitbit"]["token_url"])
-)
-API_BASE = str(
-    _get_cfg(CONFIG, ("fitbit", "api_base"), DEFAULT_CONFIG["fitbit"]["api_base"])
-)
-
-scope_cfg = _get_cfg(CONFIG, ("fitbit", "scopes"), DEFAULT_CONFIG["fitbit"]["scopes"])
-if isinstance(scope_cfg, list):
-    SCOPES = " ".join(str(x) for x in scope_cfg)
-else:
-    SCOPES = str(scope_cfg)
 
 POLL_INTERVAL = _as_int(
     _get_cfg(
@@ -1185,10 +1165,6 @@ def _build_sleep_diff_if_needed(force: bool = False) -> dict:
         }
 
 
-def basic_header() -> str:
-    return "Basic " + base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
-
-
 # ── Token 管理 ───────────────────────────────────────────────────────────────
 
 
@@ -1204,17 +1180,7 @@ def load_tokens() -> dict | None:
 
 def refresh_tokens(t: dict) -> dict | None:
     try:
-        r = req.post(
-            TOKEN_URL,
-            headers={
-                "Authorization": basic_header(),
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            data={"grant_type": "refresh_token", "refresh_token": t["refresh_token"]},
-        )
-        r.raise_for_status()
-        new = r.json()
-        new["expires_at"] = time.time() + new.get("expires_in", 28800)
+        new = google_health.refresh(OAUTH_CLIENT, t)
         save_tokens(new)
         return new
     except Exception as e:
@@ -1644,43 +1610,32 @@ def _build_sleep_report_payload(
     days = max(1, min(days, 30))
     t = tokens or valid_tokens()
     if not t:
-        return 401, {"error": "未授权，请先完成 Fitbit OAuth"}
+        return 401, {"error": "未授权，请先完成 Google Health OAuth"}
 
-    headers = {"Authorization": f"Bearer {t['access_token']}"}
-    end_date = date.today() - timedelta(days=1)  # 今天往往不完整
-    start_date = end_date - timedelta(days=days - 1)
-    start_str = start_date.isoformat()
-    end_str = end_date.isoformat()
-
-    sleep_r = req.get(
-        f"{API_BASE}/1.2/user/-/sleep/date/{start_str}/{end_str}.json",
-        headers=headers,
-        timeout=15,
-    )
-    if not sleep_r.ok:
-        return sleep_r.status_code, {
-            "error": f"Fitbit sleep API HTTP {sleep_r.status_code}"
-        }
+    # 1. dateOfSleep 是醒来当天：昨晚这一觉记在今天，所以范围包含今天
+    client = google_health.HealthClient(t["access_token"])
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days)
+    try:
+        sleep_sessions = client.sleep_sessions(start_date, end_date)
+    except (google_health.HealthApiError, req.RequestException) as e:
+        return getattr(e, "status", 502), {"error": f"Google Health sleep API: {e}"}
     sleep_by_date: dict[str, list] = {}
-    for s in sleep_r.json().get("sleep", []):
-        d = s.get("dateOfSleep", "")
-        sleep_by_date.setdefault(d, []).append(s)
+    for s in sleep_sessions:
+        sleep_by_date.setdefault(s["dateOfSleep"], []).append(s)
 
-    hrv_r = req.get(
-        f"{API_BASE}/1/user/-/hrv/date/{start_str}/{end_str}.json",
-        headers=headers,
-        timeout=15,
-    )
-    hrv_by_date: dict[str, float] = {}
-    if hrv_r.ok:
-        for h in hrv_r.json().get("hrv", []):
-            d = h.get("dateTime", "")
-            val = h.get("value", {})
-            rmssd = val.get("dailyRmssd") or val.get("deepRmssd")
-            f = _safe_float(rmssd)
-            if d and f is not None:
-                hrv_by_date[d] = round(f, 1)
+    # 2. HRV 只是附加字段，失败时不影响睡眠报告
+    try:
+        hrv_by_date = client.daily_hrv(start_date, end_date)
+    except (google_health.HealthApiError, req.RequestException) as e:
+        print(f"[google-health] HRV 读取失败: {e}")
+        hrv_by_date = {}
 
+    # 3. 今天还没醒来出报告时不占位，最近一天仍是昨晚
+    if not sleep_by_date.get(end_date.isoformat()):
+        end_date -= timedelta(days=1)
+    else:
+        start_date += timedelta(days=1)
     days_list: list[dict] = []
     cur = start_date
     while cur <= end_date:
@@ -1706,12 +1661,8 @@ def _build_sleep_report_payload(
         days_list.append(
             {
                 "date": ds,
-                "start_time": (
-                    main.get("startTime", "")[-8:-3] if main.get("startTime") else None
-                ),
-                "end_time": (
-                    main.get("endTime", "")[-8:-3] if main.get("endTime") else None
-                ),
+                "start_time": main["startTime"][11:16],
+                "end_time": main["endTime"][11:16],
                 "duration_min": duration_min,
                 "efficiency": main.get("efficiency"),
                 "minutes_asleep": main.get("minutesAsleep"),
@@ -1860,36 +1811,6 @@ def _read_sleep_projection() -> dict:
     }
 
 
-def _extract_temp_series(payload: dict) -> list[tuple[str, float]]:
-    if not isinstance(payload, dict):
-        return []
-    candidates: list[dict] = []
-    for k, v in payload.items():
-        if "temp" in k.lower() and isinstance(v, list):
-            candidates.extend([x for x in v if isinstance(x, dict)])
-    if not candidates and isinstance(payload.get("temperature"), list):
-        candidates.extend(
-            [x for x in payload.get("temperature", []) if isinstance(x, dict)]
-        )
-
-    out: list[tuple[str, float]] = []
-    for item in candidates:
-        ds = str(item.get("dateTime") or item.get("date") or "")
-        value_block = item.get("value", item)
-        val = None
-        if isinstance(value_block, dict):
-            for key in ("nightlyRelative", "temperature", "value", "temp"):
-                val = _safe_float(value_block.get(key))
-                if val is not None:
-                    break
-        else:
-            val = _safe_float(value_block)
-        if ds and val is not None:
-            out.append((ds[:10], round(val, 3)))
-    out.sort(key=lambda x: x[0])
-    return out
-
-
 def _get_temperature_signal(tokens: dict | None) -> dict:
     now_ts = time.time()
     if (
@@ -1901,34 +1822,27 @@ def _get_temperature_signal(tokens: dict | None) -> dict:
     if not tokens:
         return {"available": False, "reason": "no_token"}
 
-    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
-    end_date = date.today() - timedelta(days=1)
+    client = google_health.HealthClient(tokens["access_token"])
+    end_date = date.today()
     start_date = end_date - timedelta(days=HEALTH_BASELINE_DAYS - 1)
-    start_str = start_date.isoformat()
-    end_str = end_date.isoformat()
-    urls = {
-        "skin": f"{API_BASE}/1/user/-/temp/skin/date/{start_str}/{end_str}.json",
-        "core": f"{API_BASE}/1/user/-/temp/core/date/{start_str}/{end_str}.json",
-    }
+    readers = {"skin": client.skin_temperature, "core": client.core_temperature}
 
     result = {"available": True, "scope_ok": True, "series": {}, "alerts": []}
-    for kind, url in urls.items():
+    for kind, read in readers.items():
         try:
-            r = req.get(url, headers=headers, timeout=15)
+            series = read(start_date, end_date)
+        except google_health.HealthApiError as e:
+            result["available"] = False
+            if e.status == 403:
+                result["scope_ok"] = False
+                result["reason"] = "permission_denied"
+            else:
+                result["reason"] = f"http_{e.status}"
+            continue
         except Exception as e:
             result["available"] = False
             result["reason"] = f"request_error:{e}"
             continue
-        if r.status_code == 403:
-            result["scope_ok"] = False
-            result["available"] = False
-            result["reason"] = "permission_denied"
-            continue
-        if not r.ok:
-            result["available"] = False
-            result["reason"] = f"http_{r.status_code}"
-            continue
-        series = _extract_temp_series(r.json())
         result["series"][kind] = series
         if not series:
             continue
@@ -2308,69 +2222,37 @@ def fetch_data() -> dict | None:
     if not t:
         return None
 
-    headers = {"Authorization": f"Bearer {t['access_token']}"}
+    client = google_health.HealthClient(t["access_token"])
     global _last_fetch_day, _crossday_hr_ref_tail, _crossday_steps_ref_tail
-    today = date.today().isoformat()
+    today_d = date.today()
+    today = today_d.isoformat()
     result = {"heart_rate": [], "steps": [], "spo2": []}
 
-    def get_with_retry(url, retries=3, delay=10):
+    def read_with_retry(name: str, read, *args, retries=3, delay=10) -> list:
         for i in range(retries):
             try:
-                return req.get(url, headers=headers, timeout=15)
+                return read(*args)
+            except google_health.HealthApiError as e:
+                print(f"[google-health] {name} 请求失败: {e}")
+                return []
             except Exception as e:
                 if i < retries - 1:
                     print(f"请求失败，{delay}秒后重试（{i + 1}/{retries - 1}）: {e}")
                     time.sleep(delay)
                 else:
                     raise
+        return []
 
-    def _warn_non_ok(name: str, resp: req.Response) -> None:
-        body = (resp.text or "").strip().replace("\n", " ")
-        if len(body) > 220:
-            body = body[:220] + "..."
-        print(f"[fitbit] {name} 请求失败 status={resp.status_code} body={body}")
-
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-
-    # 心率 1min 粒度：今天数据为空时 fallback 昨天（跨凌晨同步延迟）
-    r = get_with_retry(
-        f"{API_BASE}/1/user/-/activities/heart/date/{today}/1d/1min.json"
-    )
-    if r.ok:
-        result["heart_rate"] = (
-            r.json().get("activities-heart-intraday", {}).get("dataset", [])
-        )
-    else:
-        _warn_non_ok("heart", r)
+    # 心率/步数 1min 粒度：今天数据为空时 fallback 昨天（跨凌晨同步延迟）
+    hr_day = today_d
+    result["heart_rate"] = read_with_retry("heart", client.minute_heart_rate, today_d)
     if not result["heart_rate"]:
-        r2 = get_with_retry(
-            f"{API_BASE}/1/user/-/activities/heart/date/{yesterday}/1d/1min.json"
-        )
-        if r2.ok:
-            result["heart_rate"] = (
-                r2.json().get("activities-heart-intraday", {}).get("dataset", [])
-            )
-            print(f"[fitbit] 今日心率数据为空，使用昨日数据 fallback（{yesterday}）")
-
-    # 步数 1min 粒度：今天数据为空时 fallback 昨天
-    r = get_with_retry(
-        f"{API_BASE}/1/user/-/activities/steps/date/{today}/1d/1min.json"
-    )
-    if r.ok:
-        result["steps"] = (
-            r.json().get("activities-steps-intraday", {}).get("dataset", [])
-        )
-    else:
-        _warn_non_ok("steps", r)
-    if not result["steps"]:
-        r2 = get_with_retry(
-            f"{API_BASE}/1/user/-/activities/steps/date/{yesterday}/1d/1min.json"
-        )
-        if r2.ok:
-            result["steps"] = (
-                r2.json().get("activities-steps-intraday", {}).get("dataset", [])
-            )
-            print(f"[fitbit] 今日步数数据为空，使用昨日数据 fallback（{yesterday}）")
+        hr_day = today_d - timedelta(days=1)
+        result["heart_rate"] = read_with_retry("heart", client.minute_heart_rate, hr_day)
+        if result["heart_rate"]:
+            print(f"[google-health] 今日心率数据为空，使用昨日数据 fallback（{hr_day}）")
+    hr_tail = result["heart_rate"][-1]["time"] if result["heart_rate"] else None
+    result["steps"] = read_with_retry("steps", client.minute_steps, hr_day, hr_tail)
 
     # 跨天参考：若日期切换，拼接上一轮缓存尾部，避免 00:00 附近特征断层。
     hr_for_sleep = list(result["heart_rate"])
@@ -2383,15 +2265,7 @@ def fetch_data() -> dict | None:
             steps_for_sleep = list(_crossday_steps_ref_tail[-180:]) + steps_for_sleep
 
     # 血氧 intraday
-    r = get_with_retry(f"{API_BASE}/1/user/-/spo2/date/{today}/all.json")
-    if r.ok:
-        minutes = r.json().get("minutes", [])
-        result["spo2"] = [
-            {"time": m["minute"].split("T")[-1][:8], "value": round(m["value"], 1)}
-            for m in minutes
-        ]
-    else:
-        _warn_non_ok("spo2", r)
+    result["spo2"] = read_with_retry("spo2", client.spo2_samples, today_d)
 
     # 摘要
     if not result["heart_rate"] and not result["steps"] and not result["spo2"]:
@@ -2588,16 +2462,7 @@ def polling_loop():
 
 @app.get("/auth/start")
 def auth_start():
-    challenge = make_pkce()
-    params = {
-        "response_type": "code",
-        "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI,
-        "scope": SCOPES,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    return RedirectResponse(f"{AUTH_URL}?{urllib.parse.urlencode(params)}")
+    return RedirectResponse(google_health.authorization_url(OAUTH_CLIENT, make_pkce()))
 
 
 @app.get("/api/auth/status")
@@ -2607,27 +2472,11 @@ def auth_status():
 
 @app.get("/oauth/callback")
 def oauth_callback(code: str = None, error: str = None):
-    if error or not code:
-        return HTMLResponse("<h2>Fitbit 授权失败，可以关闭此窗口后重试。</h2>", status_code=400)
-    r = req.post(
-        TOKEN_URL,
-        headers={
-            "Authorization": basic_header(),
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": REDIRECT_URI,
-            "code_verifier": _code_verifier,
-        },
-    )
-    r.raise_for_status()
-    tokens = r.json()
-    tokens["expires_at"] = time.time() + tokens.get("expires_in", 28800)
-    save_tokens(tokens)
+    if error or not code or not _code_verifier:
+        return HTMLResponse("<h2>Google Health 授权失败，可以关闭此窗口后重试。</h2>", status_code=400)
+    save_tokens(google_health.exchange_code(OAUTH_CLIENT, code, _code_verifier))
     return HTMLResponse(
-        "<h2>Fitbit 已连接</h2><p>可以关闭此窗口，Dashboard 会自动刷新。</p>"
+        "<h2>Google Health 已连接</h2><p>可以关闭此窗口，Dashboard 会自动刷新。</p>"
         "<script>window.opener?.focus();window.close();</script>"
     )
 
