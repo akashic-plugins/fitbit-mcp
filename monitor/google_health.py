@@ -102,7 +102,8 @@ class HealthClient:
             avg = (row.get("heartRate") or {}).get("beatsPerMinuteAvg")
             if avg is not None:
                 points.append({"time": _local_clock(row["startTime"]), "value": round(float(avg))})
-        return points
+        # rollUp 按时间倒序返回，下游以 [-1] 作为最新值
+        return sorted(points, key=lambda p: p["time"])
 
     # 当天按分钟的步数；旧接口逐分钟补零，零步分钟是睡眠特征的一部分，这里补到 until 为止
     def minute_steps(self, day: date, until: str | None) -> list[MinutePoint]:
