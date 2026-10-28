@@ -35,7 +35,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.3.0"
+version = "3.3.1"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (

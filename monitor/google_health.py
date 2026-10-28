@@ -229,8 +229,8 @@ class HealthClient:
 
 def _legacy_sleep(sleep: dict) -> dict:
     interval = sleep["interval"]
-    start = _civil_iso(interval["civilStartTime"])
-    end = _civil_iso(interval["civilEndTime"])
+    start = _interval_civil(interval, "start")
+    end = _interval_civil(interval, "end")
     summary = sleep.get("summary") or {}
     asleep = int(summary.get("minutesAsleep", 0))
     in_period = int(summary.get("minutesInSleepPeriod", 0))
@@ -282,3 +282,20 @@ def _civil_clock(value: Mapping[str, Mapping[str, int]]) -> str:
 
 def _civil_iso(value: Mapping[str, Mapping[str, int]]) -> str:
     return f"{_civil_date(value['date'])}T{_civil_clock(value)}.000"
+
+
+# 睡眠会话的 interval 只保证给 UTC 时刻与偏移；civil* 字段并非所有响应都带，
+# 缺了就按 startUtcOffset/endUtcOffset 换算成本地墙钟时间。
+def _interval_civil(interval: Mapping[str, object], edge: str) -> str:
+    civil = interval.get(f"civil{edge.capitalize()}Time")
+    if isinstance(civil, Mapping):
+        return _civil_iso(civil)  # type: ignore[arg-type]
+    return _offset_iso(str(interval[f"{edge}Time"]), str(interval.get(f"{edge}UtcOffset") or "0s"))
+
+
+def _offset_iso(value: str, offset: str) -> str:
+    return (_parse_utc(value) + _parse_offset(offset)).strftime("%Y-%m-%dT%H:%M:%S.000")
+
+
+def _parse_offset(value: str) -> timedelta:
+    return timedelta(seconds=int(value.rstrip("s") or 0))
