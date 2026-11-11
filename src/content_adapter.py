@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from urllib.parse import quote
@@ -12,12 +11,16 @@ import requests
 
 from agent.plugin_composition import Context, HealthHandle
 from plugins.timer.contract import OneShotTimer, TimerHandle, TimerStatus
-from plugins.eventmail.contract import BoundAlertSource, BoundContextSource
-from .sleep_context import FitbitAdapterStore
+from plugins.watch.contract import WATCH_EVENTS, WatchEvents
+from .adapter_store import FitbitAdapterStore
+
+HEALTH_SOURCE = "fitbit-health-alerts"
+SLEEP_SOURCE = "fitbit-sleep"
+_SLEEP_TEXT = {"sleeping": "睡着了", "awake": "醒着"}
 
 
-class FitbitMonitorTransientError(RuntimeError):
-    """表示 monitor HTTP/IO 边界可在下一次 Timer 重试。"""
+class FitbitTransientError(RuntimeError):
+    """表示 monitor 或值班边界的临时失败，可在下一次 Timer 重试。"""
 
 
 class FitbitMonitorClient:
@@ -54,34 +57,62 @@ class FitbitMonitorClient:
             raise RuntimeError(f"Fitbit event ACK 后仍在 pending 队列: {event_id}")
 
 
+class BorrowedWatchEvents:
+    """每次 emit 时临时借用值班服务；值班已卸载则按临时失败处理。"""
+
+    def __init__(self, ctx: Context) -> None:
+        self._ctx = ctx
+
+    async def emit(
+        self,
+        source: str,
+        *,
+        title: str = "",
+        text: str = "",
+        url: str = "",
+        at: datetime | None = None,
+        state: bool = False,
+        key: str = "",
+    ) -> str:
+        async with self._ctx.runtime_scope():
+            with self._ctx.borrow(WATCH_EVENTS) as events:
+                if events is None:
+                    raise FitbitTransientError("值班服务当前不可用")
+                return await events.emit(
+                    source, title=title, text=text, url=url, at=at, state=state, key=key
+                )
+
+
+@dataclass(frozen=True)
+class HealthEvent:
+    """monitor 队列里的一条健康事件，id 即交给值班的 key。"""
+
+    id: str
+    title: str
+    text: str
+    at: datetime | None
+
+
 class FitbitWakeRuntime:
-    """上报 Fitbit Alert 与 Context，再登记一个 Timer。"""
+    """把 Fitbit 健康事件与睡眠状态交给值班，再登记一个 Timer。"""
 
     def __init__(
         self,
         store: FitbitAdapterStore,
         timers: OneShotTimer,
-        alerts: BoundAlertSource,
-        context: BoundContextSource,
+        events: WatchEvents,
         monitor: FitbitMonitorClient,
         *,
         poll_interval: timedelta,
-        sleep_ttl: timedelta,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
-        after_provider_ack: Callable[[], None] | None = None,
         monitor_ready: Callable[[], Awaitable[None]] | None = None,
-        sleep_state: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
-        self._sleep_state = sleep_state
         self._store = store
         self._timers = timers
-        self._alerts = alerts
-        self._context = context
+        self._events = events
         self._monitor = monitor
         self._poll_interval = poll_interval
-        self._sleep_ttl = sleep_ttl
         self._now = now
-        self._after_provider_ack = after_provider_ack
         self._monitor_ready = monitor_ready
         self._handle: TimerHandle | None = None
         self._task: asyncio.Task[None] | None = None
@@ -128,7 +159,7 @@ class FitbitWakeRuntime:
                     return
                 try:
                     await self.tick()
-                except FitbitMonitorTransientError as error:
+                except FitbitTransientError as error:
                     reason = f"{type(error).__name__}: {error}"
                     health.degrade(reason)
                     _ = ctx.report_incident("fitbit_content_retry", reason)
@@ -140,118 +171,78 @@ class FitbitWakeRuntime:
                 self._handle = None
                 await handle.cleanup()
 
+    # 每条健康事件 emit 成功后立刻向 monitor 确认；睡眠只交一次当前状态。
     async def tick(self) -> None:
-        """先结算历史投递，再发布当前 monitor 快照。"""
-
-        # 1. 只拉取一次；终态 Alert 先 ACK，其余按稳定身份上报。
+        # 1. 只拉取一次 monitor 快照。
         snapshot = await asyncio.to_thread(self._monitor_snapshot)
-        items = normalize_health_events(snapshot)
-        now = _aware(self._now())
-        for item in items:
-            event_id = str(item["item_id"])
-            status = await self._alerts.status(
-                event_id=event_id,
+        # 2. 升级后的第一轮，队列里是 EventMail 时代已交过的旧事件，只确认不重交。
+        cutover = self._store.cutover_pending()
+        for event in parse_health_events(snapshot):
+            if not cutover:
+                await self._events.emit(
+                    HEALTH_SOURCE, title=event.title, text=event.text, at=event.at, key=event.id
+                )
+            await asyncio.to_thread(self._ensure_not_pending, event.id)
+        # 3. 睡眠状态数据还没同步到时是 unknown：不交，值班侧保留上一次已知状态。
+        state = sleep_state(snapshot)
+        if state != "unknown":
+            await self._events.emit(
+                SLEEP_SOURCE, text="睡眠状态：" + _SLEEP_TEXT.get(state, state), state=True
             )
-            if status in {"delivered", "skipped", "expired"}:
-                await asyncio.to_thread(self._ensure_not_pending, event_id)
-                if self._after_provider_ack is not None:
-                    self._after_provider_ack()
-                continue
-            _ = await self._alerts.report(
-                event_id=event_id,
-                payload=_mapping(item, "payload"),
-                observed_at=now,
-            )
-
-        # 2. 睡眠状态是可覆盖、会过期的 Context，不参与 Content 初筛。
-        sleep = normalize_sleep(snapshot)
-        expires_at = now + self._sleep_ttl
-        # 数据还没同步到时状态是 unknown：不上报，上一次已知的状态按自己的有效期过期。
-        if sleep["state"] != "unknown":
-            _ = await self._context.report(
-                event_id="current",
-                payload=sleep,
-                observed_at=now,
-                expires_at=expires_at,
-            )
-            # 值班（watch）在的话把当前状态交给它；状态没变时它不会记成新事件。
-            if self._sleep_state is not None:
-                await self._sleep_state(str(sleep["state"]))
+        # 4. 全部交付后才推进下一个 deadline。
         await asyncio.to_thread(
-            self._store.commit_snapshot,
-            sleep,
-            observed_at=now,
-            expires_at=expires_at,
-            next_due=now + self._poll_interval,
+            self._store.commit_tick, next_due=_aware(self._now()) + self._poll_interval
         )
 
     def _monitor_snapshot(self) -> Mapping[str, object]:
         try:
             return self._monitor.snapshot()
         except (OSError, requests.RequestException) as error:
-            raise FitbitMonitorTransientError(str(error)) from error
+            raise FitbitTransientError(str(error)) from error
 
     def _ensure_not_pending(self, event_id: str) -> None:
         try:
             self._monitor.ensure_not_pending(event_id)
         except (OSError, requests.RequestException) as error:
-            raise FitbitMonitorTransientError(str(error)) from error
+            raise FitbitTransientError(str(error)) from error
 
 
-def normalize_health_events(
-    snapshot: Mapping[str, object],
-) -> tuple[Mapping[str, object], ...]:
-    """把 monitor 队列转换成身份稳定的 Content revisions。"""
-
+# 把 monitor 队列转换成按 id 排序的健康事件。
+def parse_health_events(snapshot: Mapping[str, object]) -> tuple[HealthEvent, ...]:
     raw_events = snapshot.get("health_events")
     if not isinstance(raw_events, list):
         raise TypeError("Fitbit monitor health_events 必须是数组")
-    items: list[Mapping[str, object]] = []
-    for raw in raw_events:
+    events: list[HealthEvent] = []
+    for raw in cast(list[object], raw_events):
         if not isinstance(raw, Mapping):
             raise TypeError("Fitbit health event 必须是对象")
-        event_id = _event_id(raw)
-        payload: dict[str, object] = {
-            "upstream_event_id": event_id,
-            "source_type": "health_event",
-            "source_name": "fitbit",
-            "title": _string(raw, "type"),
-            "content": _string(raw, "message"),
-            "severity": _string(raw, "severity"),
-            "published_at": raw.get("created_at"),
-            "suggested_tone": raw.get("suggested_tone", ""),
-            "metrics": raw.get("metrics", {}),
-        }
-        revision = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
-        items.append(
-            {
-                "item_id": event_id,
-                "revision": revision,
-                "payload": payload,
-                "not_before": None,
-                "requires_ack": True,
-            }
+        item = cast(Mapping[str, object], raw)
+        events.append(
+            HealthEvent(
+                id=_event_id(item),
+                title=_string(item, "type"),
+                text=_string(item, "message"),
+                at=_parse_created_at(item.get("created_at")),
+            )
         )
-    return tuple(
-        sorted(
-            items,
-            key=lambda item: (str(item["item_id"]), str(item["revision"])),
-        )
-    )
+    return tuple(sorted(events, key=lambda event: event.id))
 
 
-def normalize_sleep(snapshot: Mapping[str, object]) -> Mapping[str, object]:
+def sleep_state(snapshot: Mapping[str, object]) -> str:
     sleep = snapshot.get("sleep")
     if not isinstance(sleep, Mapping):
         raise TypeError("Fitbit monitor sleep 必须是对象")
-    return {
-        "state": _string(sleep, "state"),
-        "prob": sleep.get("prob"),
-        "prob_source": sleep.get("prob_source"),
-        "data_lag_min": sleep.get("data_lag_min"),
-        "sleep_24h": snapshot.get("sleep_24h", {}),
-        "last_updated": snapshot.get("last_updated"),
-    }
+    return _string(cast(Mapping[str, object], sleep), "state")
+
+
+# monitor 的 created_at 是不带时区的本地时间，如 "2026-08-23 08:00"。
+def _parse_created_at(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M").astimezone()
+    except ValueError:
+        return None
 
 
 def _event_id(value: object) -> str:
@@ -260,24 +251,11 @@ def _event_id(value: object) -> str:
     return _string(cast(Mapping[str, object], value), "id")
 
 
-def _mapping(payload: Mapping[str, object], name: str) -> Mapping[str, object]:
-    value = payload.get(name)
-    if not isinstance(value, Mapping):
-        raise TypeError(f"Fitbit {name} 必须是对象")
-    return cast(Mapping[str, object], value)
-
-
 def _string(payload: Mapping[str, object], name: str) -> str:
     value = payload.get(name)
     if not isinstance(value, str) or not value:
         raise ValueError(f"Fitbit {name} 必须是非空字符串")
     return value
-
-
-def _canonical(payload: object) -> str:
-    return json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
 
 
 def _aware(value: datetime) -> datetime:

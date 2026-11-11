@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import datetime
 
 import inspect
 import shutil
@@ -30,7 +28,7 @@ from agent.plugins.composable import ComposablePlugin
 from agent.plugins.static_manifest import load_static_plugin_manifest
 from fitbit_test_plugin import plugin as plugin_module  # pyright: ignore[reportMissingImports]
 from fitbit_test_plugin.plugin import FitbitConfig  # pyright: ignore[reportMissingImports]
-from plugins.eventmail.contract import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
+from plugins.watch.contract import WATCH_EVENTS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,30 +69,18 @@ def _execution(root: CompositionRoot, generation_id: str) -> ExecutionAccess:
 
 
 async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
-    class Bound:
-        def close(self) -> None:
-            pass
-
-        async def report(self, *, event_id: str, payload: Mapping[str, object],
-                         observed_at: datetime, expires_at: datetime | None = None) -> Mapping[str, object]:
+    class Events:
+        async def emit(self, source: str, **_kwargs: object) -> str:
             raise AssertionError("来源在 runtime 启动前不能发送")
 
-        async def status(self, *, event_id: str) -> str | None:
-            raise AssertionError("来源在 runtime 启动前不能查询")
-
-    class Sources:
-        def bind(self, source_id: str) -> Bound:
-            return Bound()
-
     await root.context.provide(TIMERS, AsyncioOneShotTimer())
-    _ = await root.context.provide(EVENTMAIL_ALERT_SOURCE, Sources())
-    _ = await root.context.provide(EVENTMAIL_CONTEXT_SOURCE, Sources())
+    _ = await root.context.provide(WATCH_EVENTS, Events())
 
 
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.3.3"
+    assert plugin_module.version == "3.4.0"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx",)
     loaded = ComposablePlugin.from_module(
         plugin_module, load_static_plugin_manifest(ROOT),
@@ -149,13 +135,13 @@ async def test_apply_registers_wake_runtime_and_tools(
 
 
 @pytest.mark.asyncio
-async def test_apply_keeps_tools_without_eventmail(tmp_path: Path) -> None:
-    root = CompositionRoot("fitbit:without-eventmail")
+async def test_apply_keeps_tools_without_watch(tmp_path: Path) -> None:
+    root = CompositionRoot("fitbit:without-watch")
     processes = _Processes()
     servers = McpServers(root.context)
     await root.context.provide(MANAGED_PROCESSES, processes)
     await root.context.provide(MCP_SERVERS, servers)
-    await root.context.provide(EXECUTION, _execution(root, "fitbit:without-eventmail"))
+    await root.context.provide(EXECUTION, _execution(root, "fitbit:without-watch"))
     await root.context.provide(TOOLS, ToolCatalog(root.context, cast(TaskAdmission, None)))
     await root.context.provide(TIMERS, AsyncioOneShotTimer())
     await root.context.provide(UI, Ui(root.context, ()))
@@ -169,7 +155,7 @@ async def test_apply_keeps_tools_without_eventmail(tmp_path: Path) -> None:
         inject=plugin.inject,
         runtime=PluginRuntime(
             plugin_id="fitbit",
-            generation_id="fitbit:without-eventmail",
+            generation_id="fitbit:without-watch",
             plugin_dir=ROOT,
             data_dir=tmp_path / "plugin-data",
             workspace=tmp_path / "workspace",
@@ -197,5 +183,5 @@ def test_static_manifest_freezes_runtime_and_candidate_exclusions(tmp_path: Path
     )
     manifest = load_static_plugin_manifest(artifact)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.3.3"
+    assert manifest.version == "3.4.0"
     assert manifest.requirements == ("requirements.txt",)

@@ -12,20 +12,19 @@ from plugins.managed_processes.contract import MANAGED_PROCESSES, ManagedProcess
 from plugins.mcp.contract import MCP_SERVERS, EndpointEnv, McpServerDefinition
 from plugins.timer.contract import TIMERS
 from plugins.ui.contract import UI
+from plugins.watch.contract import WATCH_EVENTS
 from .src.content_adapter import (
+    BorrowedWatchEvents,
     FitbitWakeRuntime,
     FitbitMonitorClient,
 )
-from plugins.eventmail.contract import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
-from .src.watch_events import WATCH_EVENTS
-from .src.sleep_context import FitbitAdapterStore
+from .src.adapter_store import FitbitAdapterStore
 
 
 class FitbitContentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     poll_interval_seconds: int = Field(default=300, ge=1)
-    sleep_ttl_seconds: int = Field(default=600, ge=1)
 
 
 class FitbitConfig(BaseModel):
@@ -36,8 +35,8 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.3.3"
-desc = "Fitbit health Alert and sleep Context source"
+version = "3.4.0"
+desc = "Fitbit health events and sleep state source for watch"
 Config = FitbitConfig
 inject = (
     TOOLS,
@@ -93,49 +92,24 @@ async def apply(ctx: Context) -> None:
         async with monitor.borrow(ctx):
             return
 
-    # 2. EventMail 存在时，独立子 Fiber 才启动健康来源。
-    async def apply_eventmail(source_ctx: Context) -> None:
+    # 2. 值班存在时，独立子 Fiber 才启动健康来源。
+    async def apply_watch(source_ctx: Context) -> None:
         store = FitbitAdapterStore(source_ctx.data_root / "adapter.sqlite3")
         store.initialize(datetime.now(UTC))
-        alert_source = source_ctx.require(EVENTMAIL_ALERT_SOURCE).bind("fitbit-health-alerts")
-        try:
-            _ = await source_ctx.effect(lambda: alert_source.close, label="fitbit-alert-source-binding")
-        except BaseException:
-            alert_source.close()
-            raise
-        context_source = source_ctx.require(EVENTMAIL_CONTEXT_SOURCE).bind("fitbit-sleep")
-        try:
-            _ = await source_ctx.effect(lambda: context_source.close, label="fitbit-context-source-binding")
-        except BaseException:
-            context_source.close()
-            raise
-        async def sleep_state(state: str) -> None:
-            try:
-                async with source_ctx.runtime_scope():
-                    with source_ctx.borrow(WATCH_EVENTS) as events:
-                        if events is not None:
-                            _ = await events.emit("fitbit-sleep", text="睡眠状态：" + {"sleeping": "睡着了", "awake": "醒着"}.get(state, state), state=True)
-            except Exception as error:
-                # 值班不可用不影响健康来源本身的轮询
-                _ = source_ctx.report_incident("fitbit_watch_emit_failed", f"{type(error).__name__}: {error}"[:300])
-
         runtime = FitbitWakeRuntime(
             store,
             source_ctx.require(TIMERS),
-            alert_source,
-            context_source,
+            BorrowedWatchEvents(source_ctx),
             FitbitMonitorClient(),
             monitor_ready=monitor_ready,
-            sleep_state=sleep_state,
             poll_interval=timedelta(seconds=config.content.poll_interval_seconds),
-            sleep_ttl=timedelta(seconds=config.content.sleep_ttl_seconds),
         )
 
         def setup() -> object:
             return runtime.close
 
-        _ = await source_ctx.effect(setup, label="fitbit-eventmail-runtime")
-        poll_health = await source_ctx.health("fitbit-eventmail-poll")
+        _ = await source_ctx.effect(setup, label="fitbit-watch-runtime")
+        poll_health = await source_ctx.health("fitbit-watch-poll")
 
         async def start(_event: object) -> None:
             await runtime.start(source_ctx, poll_health)
@@ -147,7 +121,7 @@ async def apply(ctx: Context) -> None:
         _ = await source_ctx.on(RUNTIME_STOPPING, stop)
 
     _ = await ctx.inject(
-        (TIMERS, EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE),
-        apply_eventmail,
-        name="fitbit-eventmail-source",
+        (TIMERS, WATCH_EVENTS),
+        apply_watch,
+        name="fitbit-watch-source",
     )
