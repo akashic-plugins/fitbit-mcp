@@ -17,12 +17,7 @@ from .src.content_adapter import (
     FitbitMonitorClient,
 )
 from plugins.eventmail.contract import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
-
-try:
-    # 值班（watch）是可选的：装了就把睡眠状态作为事件交给它。
-    from plugins.watch.contract import WATCH_EVENTS
-except ImportError:
-    WATCH_EVENTS = None
+from .src.watch_events import WATCH_EVENTS
 from .src.sleep_context import FitbitAdapterStore
 
 
@@ -115,8 +110,6 @@ async def apply(ctx: Context) -> None:
             context_source.close()
             raise
         async def sleep_state(state: str) -> None:
-            if WATCH_EVENTS is None:
-                return
             try:
                 async with source_ctx.runtime_scope():
                     with source_ctx.borrow(WATCH_EVENTS) as events:
