@@ -164,12 +164,14 @@ class FitbitWakeRuntime:
         # 2. 睡眠状态是可覆盖、会过期的 Context，不参与 Content 初筛。
         sleep = normalize_sleep(snapshot)
         expires_at = now + self._sleep_ttl
-        _ = await self._context.report(
-            event_id="current",
-            payload=sleep,
-            observed_at=now,
-            expires_at=expires_at,
-        )
+        # 数据还没同步到时状态是 unknown：不上报，上一次已知的状态按自己的有效期过期。
+        if sleep["state"] != "unknown":
+            _ = await self._context.report(
+                event_id="current",
+                payload=sleep,
+                observed_at=now,
+                expires_at=expires_at,
+            )
         await asyncio.to_thread(
             self._store.commit_snapshot,
             sleep,
