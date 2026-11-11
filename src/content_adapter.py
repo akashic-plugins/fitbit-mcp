@@ -70,7 +70,9 @@ class FitbitWakeRuntime:
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         after_provider_ack: Callable[[], None] | None = None,
         monitor_ready: Callable[[], Awaitable[None]] | None = None,
+        sleep_state: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
+        self._sleep_state = sleep_state
         self._store = store
         self._timers = timers
         self._alerts = alerts
@@ -172,6 +174,9 @@ class FitbitWakeRuntime:
                 observed_at=now,
                 expires_at=expires_at,
             )
+            # 值班（watch）在的话把当前状态交给它；状态没变时它不会记成新事件。
+            if self._sleep_state is not None:
+                await self._sleep_state(str(sleep["state"]))
         await asyncio.to_thread(
             self._store.commit_snapshot,
             sleep,

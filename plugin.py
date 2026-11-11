@@ -17,6 +17,7 @@ from .src.content_adapter import (
     FitbitMonitorClient,
 )
 from plugins.eventmail.contract import EVENTMAIL_ALERT_SOURCE, EVENTMAIL_CONTEXT_SOURCE
+from .src.watch_events import WATCH_EVENTS
 from .src.sleep_context import FitbitAdapterStore
 
 
@@ -35,7 +36,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.3.2"
+version = "3.3.3"
 desc = "Fitbit health Alert and sleep Context source"
 Config = FitbitConfig
 inject = (
@@ -108,6 +109,16 @@ async def apply(ctx: Context) -> None:
         except BaseException:
             context_source.close()
             raise
+        async def sleep_state(state: str) -> None:
+            try:
+                async with source_ctx.runtime_scope():
+                    with source_ctx.borrow(WATCH_EVENTS) as events:
+                        if events is not None:
+                            _ = await events.emit("fitbit-sleep", text="睡眠状态：" + {"sleeping": "睡着了", "awake": "醒着"}.get(state, state), state=True)
+            except Exception as error:
+                # 值班不可用不影响健康来源本身的轮询
+                _ = source_ctx.report_incident("fitbit_watch_emit_failed", f"{type(error).__name__}: {error}"[:300])
+
         runtime = FitbitWakeRuntime(
             store,
             source_ctx.require(TIMERS),
@@ -115,6 +126,7 @@ async def apply(ctx: Context) -> None:
             context_source,
             FitbitMonitorClient(),
             monitor_ready=monitor_ready,
+            sleep_state=sleep_state,
             poll_interval=timedelta(seconds=config.content.poll_interval_seconds),
             sleep_ttl=timedelta(seconds=config.content.sleep_ttl_seconds),
         )
