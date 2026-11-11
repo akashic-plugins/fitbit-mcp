@@ -153,7 +153,7 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
         marker.write_text("keep this data", encoding="utf-8")
         plugin_path = plugin_root / "plugin.py"
         plugin_path.write_text(
-            plugin_path.read_text(encoding="utf-8").replace("3.3.1", "3.3.2"),
+            plugin_path.read_text(encoding="utf-8").replace("3.3.2", "3.3.3"),
             encoding="utf-8",
         )
         _prepare_python_environment(plugin_root, workspace)
