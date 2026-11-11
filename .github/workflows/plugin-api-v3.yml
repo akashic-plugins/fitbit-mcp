@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: kachofugetsu09/akashic-agent
-          ref: 31a6cdceb4099727c5fcad9eaa64f06eadb698a0
+          ref: d64545463faf5500ff651fa7337229c01b366393
           path: .akashic-core
       - uses: actions/setup-python@v5
         with:
@@ -46,7 +46,7 @@ jobs:
           PYTHONPATH: .akashic-core:${{ github.workspace }}/.akashic-core/sdk/python/src
         run: >-
           .venv/bin/pyright --pythonpath .venv/bin/python --level error
-          plugin.py dashboard.py src/content_adapter.py src/mcp_bridge.py
+          plugin.py dashboard.py src/content_adapter.py src/adapter_store.py src/mcp_bridge.py
           monitor/runtime_env.py
           scripts/migrate_v2_data.py
           tests/test_plugin.py tests/test_content_adapter.py tests/test_dashboard.py

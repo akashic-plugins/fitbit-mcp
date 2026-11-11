@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,13 +12,13 @@ import pytest
 from plugins.timer.timer import AsyncioOneShotTimer
 from plugins.timer.contract import TimerReceipt, TimerStatus
 from agent.plugin_composition import CompositionRoot
-from plugins.eventmail.contract import BoundAlertSource, BoundContextSource
+from plugins.watch.contract import WatchEvents
 from src.content_adapter import (
     FitbitMonitorClient,
     FitbitWakeRuntime,
-    normalize_health_events,
+    parse_health_events,
 )
-from src.sleep_context import FitbitAdapterStore
+from src.adapter_store import FitbitAdapterStore
 
 
 NOW = datetime(2026, 8, 23, 8, tzinfo=UTC)
@@ -55,131 +56,156 @@ class RecordingMonitor:
         self.acknowledged.append(event_id)
 
 
-class RecordingAlerts:
+class RecordingEvents:
     def __init__(self) -> None:
-        self.reports: list[dict[str, object]] = []
-        self.statuses: dict[str, str] = {}
+        self.emitted: list[dict[str, object]] = []
+        self.order: list[str] = []
 
-    async def report(self, **kwargs: object) -> Mapping[str, object]:
-        self.reports.append(dict(kwargs))
-        return {"accepted": True}
-
-    async def status(self, *, event_id: str) -> str | None:
-        return self.statuses.get(event_id)
+    async def emit(self, source: str, **kwargs: object) -> str:
+        self.emitted.append({"source": source, **kwargs})
+        self.order.append(f"emit:{source}")
+        return "1"
 
 
-class RecordingContext:
-    def __init__(self) -> None:
-        self.reports: list[dict[str, object]] = []
+class OrderedMonitor(RecordingMonitor):
+    def __init__(self, events: RecordingEvents) -> None:
+        super().__init__()
+        self._events = events
 
-    async def report(self, **kwargs: object) -> Mapping[str, object]:
-        self.reports.append(dict(kwargs))
-        return {"changed": True}
+    def ensure_not_pending(self, event_id: str) -> None:
+        self._events.order.append(f"ack:{event_id}")
+        super().ensure_not_pending(event_id)
 
 
 def _runtime(
     tmp_path: Path,
-    alerts: RecordingAlerts,
-    context: RecordingContext,
+    events: RecordingEvents,
     monitor: RecordingMonitor,
+    *,
+    legacy: bool = False,
 ) -> tuple[FitbitWakeRuntime, FitbitAdapterStore]:
-    store = FitbitAdapterStore(tmp_path / "adapter.sqlite3")
+    path = tmp_path / "adapter.sqlite3"
+    if legacy:
+        _write_legacy_store(path)
+    store = FitbitAdapterStore(path)
     store.initialize(NOW)
     return (
         FitbitWakeRuntime(
             store,
             AsyncioOneShotTimer(),
-            cast(BoundAlertSource, alerts),
-            cast(BoundContextSource, context),
+            cast(WatchEvents, events),
             cast(FitbitMonitorClient, monitor),
             poll_interval=timedelta(minutes=5),
-            sleep_ttl=timedelta(minutes=10),
             now=lambda: NOW,
         ),
         store,
     )
 
 
+# 写出 3.3.x（EventMail 版本）留下的存储结构。
+def _write_legacy_store(path: Path) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE source_state(
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            next_due TEXT NOT NULL,
+            sleep_json TEXT, sleep_observed_at TEXT, sleep_expires_at TEXT
+        );
+        INSERT INTO source_state VALUES(1, '2026-08-23T07:55:00+00:00', '{}', NULL, NULL);
+        """
+    )
+    connection.commit()
+    connection.close()
+
+
 @pytest.mark.asyncio
-async def test_health_reports_alert_and_sleep_reports_expiring_context(
+async def test_health_event_is_emitted_then_acknowledged_and_sleep_state_emitted(
     tmp_path: Path,
 ) -> None:
-    alerts = RecordingAlerts()
-    context = RecordingContext()
-    runtime, store = _runtime(tmp_path, alerts, context, RecordingMonitor())
+    events = RecordingEvents()
+    monitor = OrderedMonitor(events)
+    runtime, store = _runtime(tmp_path, events, monitor)
 
     await runtime.tick()
 
-    assert alerts.reports[0]["event_id"] == "fitbit:event-1"
-    assert context.reports == [
+    assert events.emitted == [
         {
-                "event_id": "current",
-            "payload": store.current_sleep(NOW),
-            "observed_at": NOW,
-            "expires_at": NOW + timedelta(minutes=10),
-        }
+            "source": "fitbit-health-alerts",
+            "title": "hr_elevated_rest",
+            "text": "静息心率持续偏高",
+            "at": datetime(2026, 8, 23, 8).astimezone(),
+            "key": "fitbit:event-1",
+        },
+        {"source": "fitbit-sleep", "text": "睡眠状态：睡着了", "state": True},
+    ]
+    assert events.order == [
+        "emit:fitbit-health-alerts",
+        "ack:fitbit:event-1",
+        "emit:fitbit-sleep",
     ]
     assert store.next_due() == NOW + timedelta(minutes=5)
 
 
-@pytest.mark.parametrize("status", ["delivered", "skipped", "expired"])
 @pytest.mark.asyncio
-async def test_terminal_alert_is_acknowledged_instead_of_reported(
-    tmp_path: Path, status: str
-) -> None:
-    alerts = RecordingAlerts()
-    alerts.statuses["fitbit:event-1"] = status
-    context = RecordingContext()
-    monitor = RecordingMonitor()
-    runtime, _ = _runtime(tmp_path, alerts, context, monitor)
-
-    await runtime.tick()
-
-    assert monitor.acknowledged == ["fitbit:event-1"]
-    assert alerts.reports == []
-    assert len(context.reports) == 1
-
-
-@pytest.mark.asyncio
-async def test_revised_alert_replaces_pending_payload_and_acks_once(tmp_path: Path) -> None:
-    class RevisedMonitor(RecordingMonitor):
-        def __init__(self) -> None:
-            super().__init__()
-            self.current = SNAPSHOT
-
+async def test_unknown_sleep_state_is_not_emitted(tmp_path: Path) -> None:
+    class UnknownMonitor(RecordingMonitor):
         def snapshot(self) -> Mapping[str, object]:
-            return self.current
+            return {**SNAPSHOT, "sleep": {"state": "unknown"}}
 
-    alerts = RecordingAlerts()
-    context = RecordingContext()
-    monitor = RevisedMonitor()
-    runtime, _ = _runtime(tmp_path, alerts, context, monitor)
-    await runtime.tick()
-    revised = {
-        **SNAPSHOT,
-        "health_events": [
-            {**cast(list[dict[str, object]], SNAPSHOT["health_events"])[0],
-             "message": "静息心率已经恢复"}
-        ],
-    }
-    monitor.current = revised
+    events = RecordingEvents()
+    runtime, _ = _runtime(tmp_path, events, UnknownMonitor())
+
     await runtime.tick()
 
-    assert [report["event_id"] for report in alerts.reports] == [
-        "fitbit:event-1",
-        "fitbit:event-1",
-    ]
-    alerts.statuses["fitbit:event-1"] = "delivered"
+    assert [item["source"] for item in events.emitted] == ["fitbit-health-alerts"]
+
+
+@pytest.mark.asyncio
+async def test_emit_failure_leaves_event_pending_and_deadline_unchanged(
+    tmp_path: Path,
+) -> None:
+    class FailingEvents(RecordingEvents):
+        async def emit(self, source: str, **kwargs: object) -> str:
+            raise RuntimeError("watch unavailable")
+
+    monitor = RecordingMonitor()
+    runtime, store = _runtime(tmp_path, FailingEvents(), monitor)
+
+    with pytest.raises(RuntimeError):
+        await runtime.tick()
+
+    assert monitor.acknowledged == []
+    assert store.next_due() == NOW
+
+
+@pytest.mark.asyncio
+async def test_first_tick_after_upgrade_acknowledges_backlog_without_emitting(
+    tmp_path: Path,
+) -> None:
+    events = RecordingEvents()
+    monitor = RecordingMonitor()
+    runtime, store = _runtime(tmp_path, events, monitor, legacy=True)
+    assert store.cutover_pending()
+
     await runtime.tick()
     assert monitor.acknowledged == ["fitbit:event-1"]
+    assert [item["source"] for item in events.emitted] == ["fitbit-sleep"]
+    assert not store.cutover_pending()
+
+    await runtime.tick()
+    assert [item["source"] for item in events.emitted] == [
+        "fitbit-sleep",
+        "fitbit-health-alerts",
+        "fitbit-sleep",
+    ]
 
 
-def test_normalization_has_stable_identity_and_revision() -> None:
-    first = normalize_health_events(SNAPSHOT)
-    second = normalize_health_events(dict(SNAPSHOT))
-    assert first == second
-    assert first[0]["item_id"] == "fitbit:event-1"
-    assert first[0]["requires_ack"] is True
+def test_parse_health_events_has_stable_identity() -> None:
+    first = parse_health_events(SNAPSHOT)
+    assert first == parse_health_events(dict(SNAPSHOT))
+    assert first[0].id == "fitbit:event-1"
+    assert first[0].title == "hr_elevated_rest"
 
 
 @pytest.mark.asyncio
@@ -235,19 +261,16 @@ async def test_transient_monitor_error_rearms_and_recovers(tmp_path: Path) -> No
                 raise OSError("temporary monitor read failure")
             return super().snapshot()
 
-    alerts = RecordingAlerts()
-    context = RecordingContext()
+    events = RecordingEvents()
     monitor = FailOnceMonitor()
     store = FitbitAdapterStore(tmp_path / "adapter.sqlite3")
     store.initialize(NOW)
     runtime = FitbitWakeRuntime(
         store,
         Timer(),
-        cast(BoundAlertSource, alerts),
-        cast(BoundContextSource, context),
+        cast(WatchEvents, events),
         cast(FitbitMonitorClient, monitor),
         poll_interval=timedelta(minutes=5),
-        sleep_ttl=timedelta(minutes=10),
         now=lambda: NOW,
     )
     root = CompositionRoot("fitbit-retry")
@@ -258,7 +281,7 @@ async def test_transient_monitor_error_rearms_and_recovers(tmp_path: Path) -> No
 
     assert monitor.calls == 2
     assert health.healthy
-    assert len(alerts.reports) == 1
+    assert len([e for e in events.emitted if e["source"] == "fitbit-health-alerts"]) == 1
     assert any(
         incident.kind == "fitbit_content_retry" for incident in root.receipt().incidents
     )
