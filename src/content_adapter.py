@@ -16,6 +16,7 @@ from .adapter_store import FitbitAdapterStore
 
 HEALTH_SOURCE = "fitbit-health-alerts"
 SLEEP_SOURCE = "fitbit-sleep"
+WORKOUT_SOURCE = "fitbit-workouts"
 _SLEEP_TEXT = {"sleeping": "睡着了", "awake": "醒着"}
 
 
@@ -86,6 +87,16 @@ class BorrowedWatchEvents:
 @dataclass(frozen=True)
 class HealthEvent:
     """monitor 队列里的一条健康事件，id 即交给值班的 key。"""
+
+    id: str
+    title: str
+    text: str
+    at: datetime | None
+
+
+@dataclass(frozen=True)
+class WorkoutEvent:
+    """monitor 过滤后的显著运动事件，id 即交给值班的 key。"""
 
     id: str
     title: str
@@ -183,13 +194,27 @@ class FitbitWakeRuntime:
                     HEALTH_SOURCE, title=event.title, text=event.text, at=event.at, key=event.id
                 )
             await asyncio.to_thread(self._ensure_not_pending, event.id)
-        # 3. 睡眠状态数据还没同步到时是 unknown：不交，值班侧保留上一次已知状态。
+        # 3. 非日常通勤的显著运动记录：去重后仅交一次给值班。
+        for workout in parse_workout_events(snapshot):
+            seen = await asyncio.to_thread(self._store.has_seen_workout, workout.id)
+            if seen:
+                continue
+            if not cutover:
+                await self._events.emit(
+                    WORKOUT_SOURCE,
+                    title=workout.title,
+                    text=workout.text,
+                    at=workout.at,
+                    key=f"workout:{workout.id}",
+                )
+            await asyncio.to_thread(self._store.mark_workout_seen, workout.id, _aware(self._now()))
+        # 4. 睡眠状态数据还没同步到时是 unknown：不交，值班侧保留上一次已知状态。
         state = sleep_state(snapshot)
         if state != "unknown":
             await self._events.emit(
                 SLEEP_SOURCE, text="睡眠状态：" + _SLEEP_TEXT.get(state, state), state=True
             )
-        # 4. 全部交付后才推进下一个 deadline。
+        # 5. 全部交付后才推进下一个 deadline。
         await asyncio.to_thread(
             self._store.commit_tick, next_due=_aware(self._now()) + self._poll_interval
         )
@@ -228,6 +253,44 @@ def parse_health_events(snapshot: Mapping[str, object]) -> tuple[HealthEvent, ..
     return tuple(sorted(events, key=lambda event: event.id))
 
 
+def parse_workout_events(snapshot: Mapping[str, object]) -> tuple[WorkoutEvent, ...]:
+    raw_workouts = snapshot.get("notable_workouts")
+    if raw_workouts is None:
+        return ()
+    if not isinstance(raw_workouts, list):
+        raise TypeError("Fitbit monitor notable_workouts 必须是数组")
+    events: list[WorkoutEvent] = []
+    for raw in cast(list[object], raw_workouts):
+        if not isinstance(raw, Mapping):
+            raise TypeError("Fitbit workout 必须是对象")
+        item = cast(Mapping[str, object], raw)
+        wid = _string(item, "id")
+        display_name = str(item.get("display_name") or item.get("exercise_type") or "运动")
+        start_time = str(item.get("start_time") or "")
+        end_time = str(item.get("end_time") or "")
+        clock_span = (
+            f"{start_time[11:16]}–{end_time[11:16]}"
+            if len(start_time) >= 16 and len(end_time) >= 16
+            else start_time or end_time
+        )
+        parts = [p for p in (clock_span, f"{item.get('active_duration_min', 0)} 分钟") if p]
+        if item.get("distance_km") is not None:
+            parts.append(f"{item['distance_km']} km")
+        if item.get("calories_kcal") is not None:
+            parts.append(f"{item['calories_kcal']} kcal")
+        if item.get("avg_heart_rate_bpm") is not None:
+            parts.append(f"均心率 {item['avg_heart_rate_bpm']} bpm")
+        events.append(
+            WorkoutEvent(
+                id=wid,
+                title=f"运动记录：{display_name}",
+                text=" · ".join(parts),
+                at=_parse_iso_local(end_time or start_time),
+            )
+        )
+    return tuple(sorted(events, key=lambda event: event.id))
+
+
 def sleep_state(snapshot: Mapping[str, object]) -> str:
     sleep = snapshot.get("sleep")
     if not isinstance(sleep, Mapping):
@@ -243,6 +306,16 @@ def _parse_created_at(value: object) -> datetime | None:
         return datetime.strptime(value, "%Y-%m-%d %H:%M").astimezone()
     except ValueError:
         return None
+
+
+def _parse_iso_local(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.astimezone()
 
 
 def _event_id(value: object) -> str:

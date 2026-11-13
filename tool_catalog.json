@@ -24,5 +24,42 @@
       "type": "object"
     },
     "read_only": true
+  },
+  {
+    "name": "fitbit_workouts",
+    "description": "获取最近 N 天 Fitbit 运动记录（类型、起止时间、时长、距离、热量、心率与配速）。",
+    "parameters": {
+      "properties": {
+        "days": {
+          "default": 14,
+          "title": "Days",
+          "type": "integer"
+        },
+        "exercise_type": {
+          "default": "",
+          "title": "Exercise Type",
+          "type": "string"
+        }
+      },
+      "title": "fitbit_workoutsArguments",
+      "type": "object"
+    },
+    "read_only": true
+  },
+  {
+    "name": "fitbit_activity_report",
+    "description": "获取最近 N 天日常活动（步数、距离、活跃分钟、热量、久坐时段）及静息心率、呼吸率、日血氧等指标。",
+    "parameters": {
+      "properties": {
+        "days": {
+          "default": 7,
+          "title": "Days",
+          "type": "integer"
+        }
+      },
+      "title": "fitbit_activity_reportArguments",
+      "type": "object"
+    },
+    "read_only": true
   }
 ]

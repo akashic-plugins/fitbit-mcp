@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS source_state(
     next_due TEXT NOT NULL,
     cutover_pending INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS seen_workouts(
+    workout_id TEXT PRIMARY KEY,
+    seen_at TEXT NOT NULL
+);
 """
 # EventMail 时代留下的睡眠缓存列，只为已删除的 Context 服务。
 _LEGACY_COLUMNS = ("sleep_json", "sleep_observed_at", "sleep_expires_at")
@@ -50,6 +54,21 @@ class FitbitAdapterStore:
     # 升级后的第一轮：monitor 队列里的旧事件只确认，不再交给值班。
     def cutover_pending(self) -> bool:
         return bool(self._read_row()["cutover_pending"])
+
+    def has_seen_workout(self, workout_id: str) -> bool:
+        with self._transaction(write=False) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM seen_workouts WHERE workout_id = ?",
+                (workout_id,),
+            ).fetchone()
+        return row is not None
+
+    def mark_workout_seen(self, workout_id: str, seen_at: datetime) -> None:
+        with self._transaction(write=True) as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO seen_workouts(workout_id, seen_at) VALUES(?, ?)",
+                (workout_id, _aware_utc(seen_at)),
+            )
 
     # 原子推进下一个来源 deadline，并清除升级标记。
     def commit_tick(self, *, next_due: datetime) -> None:

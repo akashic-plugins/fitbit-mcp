@@ -80,7 +80,7 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.4.0"
+    assert plugin_module.version == "3.5.0"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx",)
     loaded = ComposablePlugin.from_module(
         plugin_module, load_static_plugin_manifest(ROOT),
@@ -127,7 +127,12 @@ async def test_apply_registers_wake_runtime_and_tools(
     mcp = servers._entries["fitbit"].definition
     assert process.cwd == "."
     assert process.port_env == "FITBIT_MONITOR_PORT"
-    assert mcp.required_tools == ("fitbit_health_snapshot", "fitbit_sleep_report")
+    assert mcp.required_tools == (
+        "fitbit_health_snapshot",
+        "fitbit_sleep_report",
+        "fitbit_workouts",
+        "fitbit_activity_report",
+    )
     assert mcp.candidate_env == {"FITBIT_BACKEND": "recording"}
     assert data_dir.joinpath("adapter.sqlite3").is_file()
     assert any(item["name"].startswith("mcp_fitbit__") for item in (ref.description for ref in root.context.require(FITBIT_TOOLS).refs))
@@ -183,5 +188,5 @@ def test_static_manifest_freezes_runtime_and_candidate_exclusions(tmp_path: Path
     )
     manifest = load_static_plugin_manifest(artifact)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.4.0"
+    assert manifest.version == "3.5.0"
     assert manifest.requirements == ("requirements.txt",)
