@@ -137,7 +137,10 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
         assert root.context.get(UI_SLOTS) is not None
         mcp_servers = cast(McpServers, root.context.require(MCP_SERVERS))
         assert mcp_servers._entries["fitbit"].definition.required_tools == (
-            "fitbit_health_snapshot", "fitbit_sleep_report",
+            "fitbit_health_snapshot",
+            "fitbit_sleep_report",
+            "fitbit_workouts",
+            "fitbit_activity_report",
         )
         processes = cast(ManagedProcesses, root.context.require(MANAGED_PROCESSES))
         monitor = processes._entries[("fitbit", "monitor")]
@@ -150,7 +153,7 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
         marker.write_text("keep this data", encoding="utf-8")
         plugin_path = plugin_root / "plugin.py"
         plugin_path.write_text(
-            plugin_path.read_text(encoding="utf-8").replace("3.4.0", "3.4.1"),
+            plugin_path.read_text(encoding="utf-8").replace("3.5.0", "3.5.1"),
             encoding="utf-8",
         )
         _prepare_python_environment(plugin_root, workspace)
@@ -162,11 +165,14 @@ async def test_manager_updates_fitbit_on_one_live_root_and_keeps_data(
         assert manager.live_root is root
         new = manager.generation("fitbit")
         assert new is not None and new is not old and new.fiber is not None
-        assert cast(ComposablePlugin, new.instance).version == "3.4.1"
+        assert cast(ComposablePlugin, new.instance).version == "3.5.1"
         assert marker.read_text(encoding="utf-8") == "keep this data"
         mcp_servers = cast(McpServers, root.context.require(MCP_SERVERS))
         assert mcp_servers._entries["fitbit"].definition.required_tools == (
-            "fitbit_health_snapshot", "fitbit_sleep_report",
+            "fitbit_health_snapshot",
+            "fitbit_sleep_report",
+            "fitbit_workouts",
+            "fitbit_activity_report",
         )
         processes = cast(ManagedProcesses, root.context.require(MANAGED_PROCESSES))
         monitor = processes._entries[("fitbit", "monitor")]

@@ -287,3 +287,48 @@ async def test_transient_monitor_error_rearms_and_recovers(tmp_path: Path) -> No
     )
     await runtime.close()
     await root.dispose()
+
+
+@pytest.mark.asyncio
+async def test_notable_workout_is_emitted_once_and_skipped_on_cutover(
+    tmp_path: Path,
+) -> None:
+    workout = {
+        "id": "w-bike-1",
+        "exercise_type": "BIKING",
+        "display_name": "自行车",
+        "start_time": "2026-08-23T07:20:00",
+        "end_time": "2026-08-23T07:50:00",
+        "active_duration_min": 30.0,
+        "distance_km": 6.4,
+        "calories_kcal": 180.0,
+        "avg_heart_rate_bpm": 124,
+    }
+
+    class WorkoutMonitor(RecordingMonitor):
+        def snapshot(self) -> Mapping[str, object]:
+            return {**SNAPSHOT, "health_events": [], "notable_workouts": [workout]}
+
+    events = RecordingEvents()
+    runtime, store = _runtime(tmp_path, events, WorkoutMonitor())
+
+    await runtime.tick()
+    await runtime.tick()
+
+    workout_emits = [e for e in events.emitted if e["source"] == "fitbit-workouts"]
+    assert len(workout_emits) == 1
+    assert workout_emits[0]["title"] == "运动记录：自行车"
+    assert "07:20–07:50" in str(workout_emits[0]["text"])
+    assert "6.4 km" in str(workout_emits[0]["text"])
+    assert store.has_seen_workout("w-bike-1")
+
+    # 升级首轮不把积压的旧运动发给值班，但仍记入已读。
+    events_cutover = RecordingEvents()
+    cutover_dir = tmp_path / "cutover"
+    cutover_dir.mkdir()
+    runtime_cutover, store_cutover = _runtime(
+        cutover_dir, events_cutover, WorkoutMonitor(), legacy=True
+    )
+    await runtime_cutover.tick()
+    assert [e for e in events_cutover.emitted if e["source"] == "fitbit-workouts"] == []
+    assert store_cutover.has_seen_workout("w-bike-1")

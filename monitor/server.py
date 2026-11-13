@@ -10,8 +10,9 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 from datetime import datetime, date, timedelta
 from threading import Thread, Lock, Event
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TextIO
+from typing import Mapping, TextIO
 import tomllib
 import requests as req
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -1021,6 +1022,13 @@ _dashboard_snapshot: dict = {
 _health_alert_last_notify: dict[str, float] = {}
 _sleep_recovery_cache: dict[str, object] = {"fetched_at": 0.0, "payload": None}
 _temperature_cache: dict[str, object] = {"fetched_at": 0.0, "payload": None}
+_workouts_cache: dict[tuple[int, str], tuple[float, dict]] = {}
+_activity_report_cache: dict[int, tuple[float, dict]] = {}
+_notable_workouts_cache: dict[str, object] = {"fetched_at": 0.0, "items": []}
+_activity_cache_lock = Lock()
+ACTIVITY_TOOL_CACHE_SECONDS = 120
+NOTABLE_WORKOUT_CACHE_SECONDS = 600
+NOTABLE_WORKOUT_MAX_AGE_HOURS = 24
 _stat_engine = StatEngine(DATA_DIR / "stat_events.json")
 _stat_engine_v2 = HealthEventV2Runtime(
     DATA_DIR / "stat_events_v2.json",
@@ -1809,6 +1817,261 @@ def _read_sleep_projection() -> dict:
             "stale_reason": projection.get("stale_reason"),
         },
     }
+
+
+def _build_workouts_payload(
+    days: int = 14, exercise_type: str = "", tokens: dict | None = None
+) -> tuple[int, dict]:
+    """查询最近 N 天运动记录并按需按运动类型过滤，带短缓存保护配额。"""
+    days = max(1, min(int(days), 90))
+    needle = (exercise_type or "").strip().lower()
+    cache_key = (days, needle)
+    now_ts = time.time()
+    with _activity_cache_lock:
+        cached = _workouts_cache.get(cache_key)
+        if cached and now_ts - cached[0] < ACTIVITY_TOOL_CACHE_SECONDS:
+            return 200, copy.deepcopy(cached[1])
+
+    t = tokens or valid_tokens()
+    if not t:
+        return 401, {"error": "未授权，请先完成 Google Health OAuth"}
+
+    client = google_health.HealthClient(t["access_token"])
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days - 1)
+    try:
+        items = client.workouts(start_date, end_date)
+    except (google_health.HealthApiError, req.RequestException) as e:
+        return getattr(e, "status", 502), {"error": f"Google Health exercise API: {e}"}
+
+    if needle:
+        items = [
+            item
+            for item in items
+            if needle in str(item.get("exercise_type", "")).lower()
+            or needle in str(item.get("display_name", "")).lower()
+        ]
+
+    by_type: dict[str, dict[str, object]] = {}
+    total_duration_min = 0.0
+    total_calories = 0.0
+    total_distance_km = 0.0
+    for item in items:
+        et = str(item.get("exercise_type") or "UNKNOWN")
+        bucket = by_type.setdefault(
+            et,
+            {
+                "display_name": item.get("display_name") or et,
+                "count": 0,
+                "total_duration_min": 0.0,
+            },
+        )
+        bucket["count"] = int(bucket["count"]) + 1  # type: ignore[arg-type]
+        dur = float(item.get("active_duration_min") or 0.0)
+        bucket["total_duration_min"] = round(float(bucket["total_duration_min"]) + dur, 1)  # type: ignore[arg-type]
+        total_duration_min += dur
+        if item.get("calories_kcal") is not None:
+            total_calories += float(item["calories_kcal"])
+        if item.get("distance_km") is not None:
+            total_distance_km += float(item["distance_km"])
+
+    payload = {
+        "available": True,
+        "days_requested": days,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "exercise_type_filter": needle or None,
+        "count": len(items),
+        "summary": {
+            "total_duration_min": round(total_duration_min, 1),
+            "total_calories_kcal": round(total_calories, 1),
+            "total_distance_km": round(total_distance_km, 2),
+            "by_type": by_type,
+        },
+        "workouts": items,
+    }
+    with _activity_cache_lock:
+        _workouts_cache[cache_key] = (now_ts, copy.deepcopy(payload))
+    return 200, payload
+
+
+def _build_activity_report_payload(
+    days: int = 7, tokens: dict | None = None
+) -> tuple[int, dict]:
+    """构建最近 N 天日常活动、久坐时段与扩展生理指标汇总。"""
+    days = max(1, min(int(days), 30))
+    now_ts = time.time()
+    with _activity_cache_lock:
+        cached = _activity_report_cache.get(days)
+        if cached and now_ts - cached[0] < ACTIVITY_TOOL_CACHE_SECONDS:
+            return 200, copy.deepcopy(cached[1])
+
+    t = tokens or valid_tokens()
+    if not t:
+        return 401, {"error": "未授权，请先完成 Google Health OAuth"}
+
+    client = google_health.HealthClient(t["access_token"])
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days - 1)
+
+    def _safe(label: str, fn, *args, default):
+        try:
+            return fn(*args)
+        except (google_health.HealthApiError, req.RequestException) as e:
+            print(f"[google-health] {label} 读取失败: {e}")
+            return default
+
+    try:
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            f_steps = pool.submit(client.daily_activity_rollup, "steps", start_date, end_date)
+            f_dist = pool.submit(_safe, "distance", client.daily_activity_rollup, "distance", start_date, end_date, default={})
+            f_azm = pool.submit(_safe, "active-zone-minutes", client.daily_activity_rollup, "active-zone-minutes", start_date, end_date, default={})
+            f_akcal = pool.submit(_safe, "active-energy-burned", client.daily_activity_rollup, "active-energy-burned", start_date, end_date, default={})
+            f_tkcal = pool.submit(_safe, "total-calories", client.daily_activity_rollup, "total-calories", start_date, end_date, default={})
+            f_sed = pool.submit(_safe, "sedentary-period", client.sedentary_periods, start_date, end_date, default=[])
+            f_rhr = pool.submit(_safe, "daily-resting-heart-rate", client.daily_resting_heart_rate, start_date, end_date, default={})
+            f_resp = pool.submit(_safe, "daily-respiratory-rate", client.daily_respiratory_rate, start_date, end_date, default={})
+            f_spo2 = pool.submit(_safe, "daily-oxygen-saturation", client.daily_oxygen_saturation, start_date, end_date, default={})
+            f_vo2 = pool.submit(_safe, "daily-vo2-max", client.daily_vo2_max, start_date, end_date, default={})
+
+            steps_by_day = f_steps.result()
+            distance_by_day = f_dist.result()
+            azm_by_day = f_azm.result()
+            active_kcal_by_day = f_akcal.result()
+            total_kcal_by_day = f_tkcal.result()
+            sedentary_list = f_sed.result()
+            rhr_by_day = f_rhr.result()
+            resp_by_day = f_resp.result()
+            spo2_by_day = f_spo2.result()
+            vo2_by_day = f_vo2.result()
+    except (google_health.HealthApiError, req.RequestException) as e:
+        return getattr(e, "status", 502), {"error": f"Google Health activity API: {e}"}
+
+    sedentary_by_day: dict[str, list[dict]] = {}
+    for item in sedentary_list:
+        sedentary_by_day.setdefault(str(item["date"]), []).append(item)
+
+    days_list: list[dict] = []
+    cur = start_date
+    while cur <= end_date:
+        ds = cur.isoformat()
+        steps_val = (steps_by_day.get(ds) or {}).get("steps", {}).get("countSum")
+        dist_mm = (distance_by_day.get(ds) or {}).get("distance", {}).get("millimetersSum")
+        azm_raw = (azm_by_day.get(ds) or {}).get("activeZoneMinutes") or {}
+        fat_burn = int(azm_raw.get("sumInFatBurnHeartZone") or 0)
+        cardio = int(azm_raw.get("sumInCardioHeartZone") or 0)
+        peak = int(azm_raw.get("sumInPeakHeartZone") or 0)
+        azm_total = fat_burn + cardio + peak if azm_raw else None
+        active_kcal = (active_kcal_by_day.get(ds) or {}).get("activeEnergyBurned", {}).get("kcalSum")
+        total_kcal = (total_kcal_by_day.get(ds) or {}).get("totalCalories", {}).get("kcalSum")
+
+        day_sedentary = sedentary_by_day.get(ds, [])
+        sed_total_min = round(sum(float(p["duration_min"]) for p in day_sedentary), 1) if day_sedentary else 0.0
+        sed_longest_min = max((float(p["duration_min"]) for p in day_sedentary), default=0.0)
+        sed_longest = max(day_sedentary, key=lambda p: float(p["duration_min"]), default=None)
+
+        days_list.append(
+            {
+                "date": ds,
+                "steps": int(steps_val) if steps_val is not None else None,
+                "distance_km": round(float(dist_mm) / 1_000_000, 2) if dist_mm is not None else None,
+                "active_zone_minutes": {
+                    "total": azm_total,
+                    "fat_burn": fat_burn if azm_raw else None,
+                    "cardio": cardio if azm_raw else None,
+                    "peak": peak if azm_raw else None,
+                },
+                "active_calories_kcal": round(float(active_kcal), 1) if active_kcal is not None else None,
+                "total_calories_kcal": round(float(total_kcal), 1) if total_kcal is not None else None,
+                "sedentary": {
+                    "count": len(day_sedentary),
+                    "total_minutes": sed_total_min,
+                    "longest_minutes": sed_longest_min,
+                    "longest_window": (
+                        f"{sed_longest['start_time'][11:16]}-{sed_longest['end_time'][11:16]}"
+                        if sed_longest
+                        else None
+                    ),
+                },
+                "resting_hr_bpm": rhr_by_day.get(ds),
+                "respiratory_rate_bpm": resp_by_day.get(ds),
+                "spo2": spo2_by_day.get(ds),
+                "vo2_max": vo2_by_day.get(ds),
+            }
+        )
+        cur += timedelta(days=1)
+
+    step_vals = [d["steps"] for d in days_list if d["steps"] is not None]
+    azm_vals = [d["active_zone_minutes"]["total"] for d in days_list if d["active_zone_minutes"]["total"] is not None]
+    sed_vals = [d["sedentary"]["total_minutes"] for d in days_list if d["sedentary"]["count"] > 0]
+    rhr_vals = [d["resting_hr_bpm"] for d in days_list if d["resting_hr_bpm"] is not None]
+    resp_vals = [d["respiratory_rate_bpm"] for d in days_list if d["respiratory_rate_bpm"] is not None]
+
+    payload = {
+        "available": True,
+        "days_requested": days,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "summary": {
+            "days_with_steps": len(step_vals),
+            "avg_steps": round(sum(step_vals) / len(step_vals)) if step_vals else None,
+            "total_steps": sum(step_vals) if step_vals else 0,
+            "avg_active_zone_minutes": round(sum(azm_vals) / len(azm_vals), 1) if azm_vals else None,
+            "avg_sedentary_minutes": round(sum(sed_vals) / len(sed_vals), 1) if sed_vals else None,
+            "avg_resting_hr_bpm": round(sum(rhr_vals) / len(rhr_vals), 1) if rhr_vals else None,
+            "avg_respiratory_rate_bpm": round(sum(resp_vals) / len(resp_vals), 1) if resp_vals else None,
+        },
+        "days": days_list,
+    }
+    with _activity_cache_lock:
+        _activity_report_cache[days] = (now_ts, copy.deepcopy(payload))
+    return 200, payload
+
+
+def _is_notable_workout(workout: Mapping[str, object]) -> bool:
+    exercise_type = str(workout.get("exercise_type") or "").upper()
+    active_sec = int(workout.get("active_duration_sec") or 0)
+    if exercise_type != "WALKING":
+        return active_sec >= 300
+    return active_sec >= 3600
+
+
+def _recent_notable_workouts(tokens: dict | None = None) -> list[dict]:
+    """为 Watch 提供最近 24h 内值得留意的非日常通勤运动（短缓存，失败降级空列表）。"""
+    now_ts = time.time()
+    with _activity_cache_lock:
+        fetched_at = float(_notable_workouts_cache.get("fetched_at", 0.0) or 0.0)
+        if now_ts - fetched_at < NOTABLE_WORKOUT_CACHE_SECONDS:
+            return copy.deepcopy(list(_notable_workouts_cache.get("items") or []))
+
+    t = tokens or valid_tokens()
+    if not t:
+        return []
+
+    client = google_health.HealthClient(t["access_token"])
+    today_d = date.today()
+    try:
+        raw = client.workouts(today_d - timedelta(days=1), today_d)
+    except (google_health.HealthApiError, req.RequestException) as e:
+        print(f"[google-health] notable workouts 读取失败: {e}")
+        return []
+
+    cutoff = datetime.now() - timedelta(hours=NOTABLE_WORKOUT_MAX_AGE_HOURS)
+    notable: list[dict] = []
+    for item in raw:
+        if not _is_notable_workout(item):
+            continue
+        try:
+            end_dt = datetime.fromisoformat(str(item["end_time"]))
+        except ValueError:
+            continue
+        if end_dt >= cutoff:
+            notable.append(item)
+
+    with _activity_cache_lock:
+        _notable_workouts_cache["fetched_at"] = now_ts
+        _notable_workouts_cache["items"] = copy.deepcopy(notable)
+    return notable
 
 
 def _get_temperature_signal(tokens: dict | None) -> dict:
@@ -2641,21 +2904,39 @@ def api_dashboard_snapshot():
 
 @app.get("/api/agent")
 def api_agent():
-    """供 Akashic agent 专用：睡眠状态 + 健康事件队列，不含原始数字。"""
+    """供 Akashic agent 专用：睡眠状态 + 健康事件队列 + 显著运动，不含原始心率步数流。"""
     with data_lock:
         sleep = latest_data.get("sleep", {}) or {}
         signals = latest_data.get("signals", {}) or {}
         meta = latest_data.get("data_meta", {}) or {}
         last_updated = latest_data.get("last_updated", "")
     health_events = _current_health_events()
+    notable_workouts = _recent_notable_workouts()
     return JSONResponse(
         {
             "sleep": _build_external_sleep_payload(sleep, signals, meta),
             "health_events": health_events,
+            "notable_workouts": notable_workouts,
             "sleep_24h": _build_external_sleep_24h_payload(),
             "last_updated": last_updated,
         }
     )
+
+
+@app.get("/api/tool/fitbit_workouts")
+def api_tool_fitbit_workouts(days: int = 14, exercise_type: str = ""):
+    """返回最近 N 天的运动记录明细与汇总。"""
+    status, payload = _build_workouts_payload(
+        days=days, exercise_type=exercise_type, tokens=None
+    )
+    return JSONResponse(payload, status_code=status)
+
+
+@app.get("/api/tool/fitbit_activity_report")
+def api_tool_fitbit_activity_report(days: int = 7):
+    """返回最近 N 天日常活动、久坐时段与扩展生理指标汇总。"""
+    status, payload = _build_activity_report_payload(days=days, tokens=None)
+    return JSONResponse(payload, status_code=status)
 
 
 @app.get("/api/tool/fitbit_health_snapshot")
@@ -2744,6 +3025,10 @@ def api_sleep_projection():
 
 @app.get("/api/refresh")
 def api_refresh():
+    with _activity_cache_lock:
+        _workouts_cache.clear()
+        _activity_report_cache.clear()
+        _notable_workouts_cache["fetched_at"] = 0.0
     poll_event.set()
     return {"status": "refreshing"}
 

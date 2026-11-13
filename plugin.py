@@ -35,7 +35,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.4.0"
+version = "3.5.0"
 desc = "Fitbit health events and sleep state source for watch"
 Config = FitbitConfig
 inject = (
@@ -76,10 +76,17 @@ async def apply(ctx: Context) -> None:
         McpServerDefinition(
             name="fitbit",
             command=("python", "run_mcp.py"),
-            required_tools=("fitbit_health_snapshot", "fitbit_sleep_report"),
+            required_tools=(
+                "fitbit_health_snapshot",
+                "fitbit_sleep_report",
+                "fitbit_workouts",
+                "fitbit_activity_report",
+            ),
             candidate_read_only_tools=(
                 "fitbit_health_snapshot",
                 "fitbit_sleep_report",
+                "fitbit_workouts",
+                "fitbit_activity_report",
             ),
             endpoint_env=(EndpointEnv("FITBIT_MONITOR_PORT", monitor),),
             candidate_env={"FITBIT_BACKEND": "recording"},
