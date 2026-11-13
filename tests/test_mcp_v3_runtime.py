@@ -109,7 +109,7 @@ async def test_workouts_and_activity_report_bound_params_and_forward_payload(
     assert calls[0][0].endswith("/api/tool/fitbit_workouts")
     assert calls[0][1] == {
         "params": {"days": 90, "exercise_type": "BIKING"},
-        "timeout": 15,
+        "timeout": 20,
     }
     assert calls[1][0].endswith("/api/tool/fitbit_activity_report")
-    assert calls[1][1] == {"params": {"days": 1}, "timeout": 20}
+    assert calls[1][1] == {"params": {"days": 1}, "timeout": 30}

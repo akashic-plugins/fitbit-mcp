@@ -64,12 +64,12 @@ def create_mcp_server() -> FastMCP:
         params: dict[str, str | int] = {"days": bounded_days}
         if exercise_type.strip():
             params["exercise_type"] = exercise_type.strip()
-        return _get_json("/api/tool/fitbit_workouts", params=params, timeout=15)
+        return _get_json("/api/tool/fitbit_workouts", params=params, timeout=20)
 
     @mcp.tool()
     def fitbit_activity_report(days: int = 7) -> str:
         """获取最近 N 天日常活动（步数、距离、活跃分钟、热量、久坐时段）及静息心率、呼吸率、日血氧等指标。"""
         bounded_days = max(1, min(int(days), 30))
-        return _get_json("/api/tool/fitbit_activity_report", params={"days": bounded_days}, timeout=20)
+        return _get_json("/api/tool/fitbit_activity_report", params={"days": bounded_days}, timeout=30)
 
     return mcp

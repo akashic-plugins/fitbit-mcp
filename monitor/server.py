@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 from datetime import datetime, date, timedelta
 from threading import Thread, Lock, Event
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Mapping, TextIO
 import tomllib
@@ -1921,19 +1922,30 @@ def _build_activity_report_payload(
             return default
 
     try:
-        steps_by_day = client.daily_activity_rollup("steps", start_date, end_date)
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            f_steps = pool.submit(client.daily_activity_rollup, "steps", start_date, end_date)
+            f_dist = pool.submit(_safe, "distance", client.daily_activity_rollup, "distance", start_date, end_date, default={})
+            f_azm = pool.submit(_safe, "active-zone-minutes", client.daily_activity_rollup, "active-zone-minutes", start_date, end_date, default={})
+            f_akcal = pool.submit(_safe, "active-energy-burned", client.daily_activity_rollup, "active-energy-burned", start_date, end_date, default={})
+            f_tkcal = pool.submit(_safe, "total-calories", client.daily_activity_rollup, "total-calories", start_date, end_date, default={})
+            f_sed = pool.submit(_safe, "sedentary-period", client.sedentary_periods, start_date, end_date, default=[])
+            f_rhr = pool.submit(_safe, "daily-resting-heart-rate", client.daily_resting_heart_rate, start_date, end_date, default={})
+            f_resp = pool.submit(_safe, "daily-respiratory-rate", client.daily_respiratory_rate, start_date, end_date, default={})
+            f_spo2 = pool.submit(_safe, "daily-oxygen-saturation", client.daily_oxygen_saturation, start_date, end_date, default={})
+            f_vo2 = pool.submit(_safe, "daily-vo2-max", client.daily_vo2_max, start_date, end_date, default={})
+
+            steps_by_day = f_steps.result()
+            distance_by_day = f_dist.result()
+            azm_by_day = f_azm.result()
+            active_kcal_by_day = f_akcal.result()
+            total_kcal_by_day = f_tkcal.result()
+            sedentary_list = f_sed.result()
+            rhr_by_day = f_rhr.result()
+            resp_by_day = f_resp.result()
+            spo2_by_day = f_spo2.result()
+            vo2_by_day = f_vo2.result()
     except (google_health.HealthApiError, req.RequestException) as e:
         return getattr(e, "status", 502), {"error": f"Google Health activity API: {e}"}
-
-    distance_by_day = _safe("distance", client.daily_activity_rollup, "distance", start_date, end_date, default={})
-    azm_by_day = _safe("active-zone-minutes", client.daily_activity_rollup, "active-zone-minutes", start_date, end_date, default={})
-    active_kcal_by_day = _safe("active-energy-burned", client.daily_activity_rollup, "active-energy-burned", start_date, end_date, default={})
-    total_kcal_by_day = _safe("total-calories", client.daily_activity_rollup, "total-calories", start_date, end_date, default={})
-    sedentary_list = _safe("sedentary-period", client.sedentary_periods, start_date, end_date, default=[])
-    rhr_by_day = _safe("daily-resting-heart-rate", client.daily_resting_heart_rate, start_date, end_date, default={})
-    resp_by_day = _safe("daily-respiratory-rate", client.daily_respiratory_rate, start_date, end_date, default={})
-    spo2_by_day = _safe("daily-oxygen-saturation", client.daily_oxygen_saturation, start_date, end_date, default={})
-    vo2_by_day = _safe("daily-vo2-max", client.daily_vo2_max, start_date, end_date, default={})
 
     sedentary_by_day: dict[str, list[dict]] = {}
     for item in sedentary_list:
