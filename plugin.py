@@ -35,7 +35,7 @@ class FitbitConfig(BaseModel):
 
 api_version = 3
 name = "fitbit"
-version = "3.5.0"
+version = "3.6.0"
 desc = "Fitbit health events and sleep state source for watch"
 Config = FitbitConfig
 inject = (

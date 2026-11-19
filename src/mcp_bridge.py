@@ -53,9 +53,9 @@ def create_mcp_server() -> FastMCP:
 
     @mcp.tool()
     def fitbit_sleep_report(days: int = 7) -> str:
-        """获取最近 N 天 Fitbit 睡眠质量报告。"""
+        """获取最近 N 天 Fitbit 睡眠质量报告（含最近一晚逐段分期、微觉醒、夜间心率、呼吸率与皮温偏移）。"""
         bounded_days = max(1, min(int(days), 30))
-        return _get_json("/api/sleep_report", params={"days": bounded_days}, timeout=10)
+        return _get_json("/api/sleep_report", params={"days": bounded_days}, timeout=20)
 
     @mcp.tool()
     def fitbit_workouts(days: int = 14, exercise_type: str = "") -> str:

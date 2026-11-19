@@ -74,7 +74,7 @@ async def test_sleep_report_bounds_days_and_preserves_unauthorized_result(
     assert await _call("fitbit_sleep_report", {"days": 100}) == {
         "error": "Fitbit 未授权，请先完成 OAuth 授权。"
     }
-    assert calls == [{"params": {"days": 30}, "timeout": 10}]
+    assert calls == [{"params": {"days": 30}, "timeout": 20}]
 
 
 @pytest.mark.asyncio
