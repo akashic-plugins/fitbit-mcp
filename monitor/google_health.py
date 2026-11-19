@@ -355,6 +355,36 @@ class HealthClient:
         return dict(r.json())
 
 
+def _parse_sleep_segments(
+    raw_items: object, session_start_local: str, *, include_type: bool
+) -> list[dict[str, object]]:
+    if not isinstance(raw_items, list):
+        return []
+    session_start_dt = datetime.fromisoformat(session_start_local[:19])
+    parsed: list[dict[str, object]] = []
+    for item in raw_items:
+        if not isinstance(item, Mapping):
+            continue
+        if "startTime" not in item and "civilStartTime" not in item:
+            continue
+        if "endTime" not in item and "civilEndTime" not in item:
+            continue
+        st_local = _interval_civil(item, "start")[:19]
+        et_local = _interval_civil(item, "end")[:19]
+        m0 = round((datetime.fromisoformat(st_local) - session_start_dt).total_seconds() / 60)
+        m1 = round((datetime.fromisoformat(et_local) - session_start_dt).total_seconds() / 60)
+        row: dict[str, object] = {
+            "start": st_local[11:16],
+            "end": et_local[11:16],
+            "m0": m0,
+            "m1": m1,
+        }
+        if include_type:
+            row["type"] = str(item.get("type") or "")
+        parsed.append(row)
+    return parsed
+
+
 def _legacy_sleep(sleep: dict) -> dict:
     interval = sleep["interval"]
     start = _interval_civil(interval, "start")
@@ -380,6 +410,10 @@ def _legacy_sleep(sleep: dict) -> dict:
         "minutesAwake": int(summary.get("minutesAwake", 0)),
         "isMainSleep": bool((sleep.get("metadata") or {}).get("mainSleep")),
         "levels": {"summary": levels},
+        "stages": _parse_sleep_segments(sleep.get("stages"), start, include_type=True),
+        "shortAwakenings": _parse_sleep_segments(
+            sleep.get("shortAwakenings"), start, include_type=False
+        ),
     }
 
 

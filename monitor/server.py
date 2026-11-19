@@ -1632,12 +1632,24 @@ def _build_sleep_report_payload(
     for s in sleep_sessions:
         sleep_by_date.setdefault(s["dateOfSleep"], []).append(s)
 
-    # 2. HRV 只是附加字段，失败时不影响睡眠报告
+    # 2. HRV / 呼吸率 / 夜间皮温是附加字段，失败时不影响睡眠报告
     try:
         hrv_by_date = client.daily_hrv(start_date, end_date)
     except (google_health.HealthApiError, req.RequestException) as e:
         print(f"[google-health] HRV 读取失败: {e}")
         hrv_by_date = {}
+
+    try:
+        resp_by_date = client.daily_respiratory_rate(start_date, end_date)
+    except (google_health.HealthApiError, req.RequestException, AttributeError) as e:
+        print(f"[google-health] 呼吸率读取失败: {e}")
+        resp_by_date = {}
+
+    try:
+        temp_by_date = dict(client.skin_temperature(start_date, end_date))
+    except (google_health.HealthApiError, req.RequestException, AttributeError) as e:
+        print(f"[google-health] 皮温读取失败: {e}")
+        temp_by_date = {}
 
     # 3. 今天还没醒来出报告时不占位，最近一天仍是昨晚
     if not sleep_by_date.get(end_date.isoformat()):
@@ -1645,6 +1657,8 @@ def _build_sleep_report_payload(
     else:
         start_date += timedelta(days=1)
     days_list: list[dict] = []
+    latest_main: dict | None = None
+    latest_day_entry: dict | None = None
     cur = start_date
     while cur <= end_date:
         ds = cur.isoformat()
@@ -1666,23 +1680,26 @@ def _build_sleep_report_payload(
         def lvl_min(key: str) -> int:
             return levels.get(key, {}).get("minutes", 0)
 
-        days_list.append(
-            {
-                "date": ds,
-                "start_time": main["startTime"][11:16],
-                "end_time": main["endTime"][11:16],
-                "duration_min": duration_min,
-                "efficiency": main.get("efficiency"),
-                "minutes_asleep": main.get("minutesAsleep"),
-                "minutes_awake": main.get("minutesAwake"),
-                "deep_min": lvl_min("deep"),
-                "light_min": lvl_min("light"),
-                "rem_min": lvl_min("rem"),
-                "wake_min": lvl_min("wake"),
-                "hrv_ms": hrv_val,
-                "no_data": False,
-            }
-        )
+        entry = {
+            "date": ds,
+            "start_time": main["startTime"][11:16],
+            "end_time": main["endTime"][11:16],
+            "duration_min": duration_min,
+            "efficiency": main.get("efficiency"),
+            "minutes_asleep": main.get("minutesAsleep"),
+            "minutes_awake": main.get("minutesAwake"),
+            "deep_min": lvl_min("deep"),
+            "light_min": lvl_min("light"),
+            "rem_min": lvl_min("rem"),
+            "wake_min": lvl_min("wake"),
+            "hrv_ms": hrv_val,
+            "respiratory_rate": resp_by_date.get(ds),
+            "skin_temp_delta_c": temp_by_date.get(ds),
+            "no_data": False,
+        }
+        days_list.append(entry)
+        latest_main = main
+        latest_day_entry = entry
         cur += timedelta(days=1)
 
     valid = [d for d in days_list if not d.get("no_data")]
@@ -1703,7 +1720,52 @@ def _build_sleep_report_payload(
         "avg_rem_min": avg("rem_min"),
         "avg_hrv_ms": avg("hrv_ms"),
     }
-    return 200, {"summary": summary, "days": days_list}
+
+    latest_detail: dict | None = None
+    if latest_main is not None and latest_day_entry is not None:
+        night_hr_5min: list[list[int]] = []
+        night_hr_stats: dict | None = None
+        try:
+            st_dt = datetime.fromisoformat(latest_main["startTime"][:19])
+            ed_dt = datetime.fromisoformat(latest_main["endTime"][:19])
+            span_min = max(1, round((ed_dt - st_dt).total_seconds() / 60))
+            buckets: dict[int, list[float]] = {}
+            all_hr: list[float] = []
+            day_cur = st_dt.date()
+            while day_cur <= ed_dt.date():
+                for pt in client.minute_heart_rate(day_cur):
+                    hh, mm, ss = (int(x) for x in pt["time"].split(":"))
+                    pt_dt = datetime(day_cur.year, day_cur.month, day_cur.day, hh, mm, ss)
+                    if st_dt <= pt_dt <= ed_dt:
+                        val = float(pt["value"])
+                        all_hr.append(val)
+                        off = max(0, min(span_min, round((pt_dt - st_dt).total_seconds() / 60)))
+                        buckets.setdefault((off // 5) * 5, []).append(val)
+                day_cur += timedelta(days=1)
+            night_hr_5min = [
+                [b, round(sum(vs) / len(vs))] for b, vs in sorted(buckets.items())
+            ]
+            if all_hr:
+                night_hr_stats = {
+                    "min": round(min(all_hr)),
+                    "avg": round(sum(all_hr) / len(all_hr), 1),
+                    "max": round(max(all_hr)),
+                }
+        except (google_health.HealthApiError, req.RequestException, AttributeError, ValueError) as e:
+            print(f"[google-health] 夜间心率读取失败: {e}")
+
+        short_aw = latest_main.get("shortAwakenings") or []
+        short_aw_min = sum(max(0, int(x.get("m1", 0)) - int(x.get("m0", 0))) for x in short_aw)
+        latest_detail = {
+            **latest_day_entry,
+            "stages": latest_main.get("stages") or [],
+            "short_awakenings": short_aw,
+            "short_awakenings_min": short_aw_min,
+            "night_hr_5min": night_hr_5min,
+            "night_hr_stats": night_hr_stats,
+        }
+
+    return 200, {"summary": summary, "days": days_list, "latest_detail": latest_detail}
 
 
 def _write_sleep_projection(report: dict) -> None:
