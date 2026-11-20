@@ -42,11 +42,17 @@ class McpTool:
         return None
 
 
+_FITBIT_TOOL_ICONS = {
+    "fitbit_sleep_report": "moon",
+    "fitbit_workouts": "activity",
+}
+
+
 async def register_tools(ctx: Context, *, description: str) -> None:
     """发布随源码交付的发现目录；只有实际调用才打开 MCP。"""
     catalog = json.loads(Path(__file__).with_name("tool_catalog.json").read_text())
     tools = ctx.require(TOOLS)
-    await tools.declare_group(ctx, description=description)
+    await tools.declare_group(ctx, description=description, icon="heart-pulse")
     refs = [await _register_tool(ctx, item) for item in catalog]
     await ctx.provide(FITBIT_TOOLS, tools.view(*refs))
 
@@ -68,4 +74,5 @@ async def _register_tool(ctx: Context, item: dict) -> ToolRef:
         parameters=item["parameters"],
         open=open_tool,
         idempotent=item["read_only"],
+        icon=_FITBIT_TOOL_ICONS.get(item["name"]),
     )
