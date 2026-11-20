@@ -51,9 +51,9 @@ SETTINGS_FORM = SettingsForm(
     title="Fitbit 健康数据", description="经 Google Health API 读取 Fitbit 的睡眠、心率和运动，交给值班，也供聊天时查询。",
     fields=(
         SettingsField("google_client_id", "Google OAuth 客户端 ID",
-                      hint="Google Cloud 控制台新建「Web 应用」客户端，启用 Google Health API"),
-        SettingsField("google_client_secret", "客户端密钥", kind="secret",
-                      hint="客户端的重定向 URI 填 http://localhost:18765/oauth/callback"),
+                      hint="Google Cloud 控制台新建「Web 应用」客户端并启用 Google Health API，"
+                           "重定向 URI 填 http://localhost:18765/oauth/callback"),
+        SettingsField("google_client_secret", "客户端密钥", kind="secret"),
     ),
     setup=Setup("health", "健康数据", Ability(
         pitch="留意你的睡眠和身体状态",
