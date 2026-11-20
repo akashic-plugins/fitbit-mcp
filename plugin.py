@@ -103,6 +103,9 @@ class MonitorAuthorization:
 
     async def start(self) -> str:
         async with self._monitor.borrow(self._ctx) as port:
+            status = await asyncio.to_thread(_read_json, f"http://127.0.0.1:{port}/api/auth/status")
+            if not status.get("client_configured"):
+                raise ValueError("还没有填写 Google OAuth 客户端 ID 和密钥")
             location = await asyncio.to_thread(_redirect_location, f"http://127.0.0.1:{port}/auth/start")
         parsed = urlsplit(location)
         if parsed.scheme != "https" or parsed.netloc != "accounts.google.com":
