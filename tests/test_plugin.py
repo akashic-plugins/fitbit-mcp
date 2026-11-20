@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from agent.plugin_composition import CREDENTIALS
+from agent.plugin_composition.credentials import CredentialClients
+
 
 import inspect
 import shutil
@@ -80,7 +83,7 @@ async def _mount_services(root: CompositionRoot, tmp_path: Path) -> None:
 def test_pure_v3_exports_and_exact_apply() -> None:
     assert plugin_module.api_version == 3
     assert plugin_module.name == "fitbit"
-    assert plugin_module.version == "3.6.0"
+    assert plugin_module.version == "3.7.0"
     assert tuple(inspect.signature(plugin_module.apply).parameters) == ("ctx",)
     loaded = ComposablePlugin.from_module(
         plugin_module, load_static_plugin_manifest(ROOT),
@@ -97,6 +100,7 @@ async def test_apply_registers_wake_runtime_and_tools(
     processes = _Processes()
     servers = McpServers(root.context)
     await root.context.provide(MANAGED_PROCESSES, processes)
+    await root.context.provide(CREDENTIALS, CredentialClients({}))
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:test"))
     await root.context.provide(TOOLS, ToolCatalog(root.context, cast(TaskAdmission, None)))
@@ -145,6 +149,7 @@ async def test_apply_keeps_tools_without_watch(tmp_path: Path) -> None:
     processes = _Processes()
     servers = McpServers(root.context)
     await root.context.provide(MANAGED_PROCESSES, processes)
+    await root.context.provide(CREDENTIALS, CredentialClients({}))
     await root.context.provide(MCP_SERVERS, servers)
     await root.context.provide(EXECUTION, _execution(root, "fitbit:without-watch"))
     await root.context.provide(TOOLS, ToolCatalog(root.context, cast(TaskAdmission, None)))
@@ -188,5 +193,5 @@ def test_static_manifest_freezes_runtime_and_candidate_exclusions(tmp_path: Path
     )
     manifest = load_static_plugin_manifest(artifact)
     assert manifest.name == "fitbit"
-    assert manifest.version == "3.6.0"
+    assert manifest.version == "3.7.0"
     assert manifest.requirements == ("requirements.txt",)

@@ -19,9 +19,9 @@ def test_monitor_keeps_auth_without_the_sleep_diff_interface(
 ) -> None:
     token_file = tmp_path / "tokens.json"
     monkeypatch.setattr(server, "TOKEN_FILE", token_file)
-    assert server.auth_status() == {"authorized": False}
+    assert server.auth_status()["authorized"] is False
     token_file.write_text("{}", encoding="utf-8")
-    assert server.auth_status() == {"authorized": True}
+    assert server.auth_status()["authorized"] is True
 
     paths = {route.path for route in server.app.routes}
     assert "/auth/start" in paths
