@@ -323,9 +323,12 @@ def _load_runtime_config() -> dict:
 
 CONFIG = _load_runtime_config()
 
+# 插件设置里填的客户端经环境变量传入，优先于 monitor 配置文件。
 OAUTH_CLIENT = google_health.OAuthClient(
-    client_id=str(_get_cfg(CONFIG, ("google_health", "client_id"), "")),
-    client_secret=str(_get_cfg(CONFIG, ("google_health", "client_secret"), "")),
+    client_id=os.environ.get("GOOGLE_HEALTH_CLIENT_ID", "").strip()
+    or str(_get_cfg(CONFIG, ("google_health", "client_id"), "")),
+    client_secret=os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
+    or str(_get_cfg(CONFIG, ("google_health", "client_secret"), "")),
     redirect_uri=str(
         _get_cfg(
             CONFIG,
@@ -2792,7 +2795,10 @@ def auth_start():
 
 @app.get("/api/auth/status")
 def auth_status():
-    return {"authorized": TOKEN_FILE.exists()}
+    return {
+        "authorized": TOKEN_FILE.exists(),
+        "client_configured": bool(OAUTH_CLIENT.client_id and OAUTH_CLIENT.client_secret),
+    }
 
 
 @app.get("/oauth/callback")
